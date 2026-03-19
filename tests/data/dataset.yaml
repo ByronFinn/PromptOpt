@@ -1,0 +1,19 @@
+samples:
+  - id: sample_001
+    input: "患者男性，58岁，因反复咳嗽、咳痰伴喘息10年，加重1周入院。"
+    expected:
+      疾病: 慢性支气管炎
+      症状: ["咳嗽", "咳痰", "喘息"]
+    split: dev
+  - id: sample_002
+    input: "患者女性，42岁，体检发现血糖升高3年。"
+    expected:
+      疾病: 糖尿病
+      症状: ["血糖升高"]
+    split: test
+  - id: sample_003
+    input: "患者男性，65岁，突发胸痛2小时。"
+    expected:
+      疾病: 心肌梗死
+      症状: ["胸痛"]
+    split: train
