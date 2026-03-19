@@ -1,0 +1,15 @@
+name: medical_ner
+path: datasets/medical_ner.json
+split_field: split
+
+# 示例数据结构
+# {
+#   "samples": [
+#     {
+#       "id": "sample_001",
+#       "input": "患者男性，58岁，因反复咳嗽、咳痰伴喘息10年，加重1周入院...",
+#       "expected": {"疾病": "慢性支气管炎", "症状": ["咳嗽", "咳痰", "喘息"], "检查": [], "治疗": []},
+#       "split": "dev"
+#     }
+#   ]
+# }

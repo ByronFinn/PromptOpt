@@ -1,0 +1,31 @@
+# PromptOpt Local Configuration
+
+# 模型配置
+models:
+  # Teacher model (for optimization)
+  teacher: openai/gpt-4
+  
+  # Target model (to be evaluated)
+  target: openai/gpt-3.5-turbo
+  
+  # Local models (optional)
+  local:
+    - name: ollama/llama2
+      base_url: http://localhost:11434
+    - name: vllm/Qwen2-7B
+      base_url: http://localhost:8000
+
+# 评估配置
+evaluation:
+  batch_size: 10
+  max_workers: 5
+  timeout: 60
+
+# 存储配置
+storage:
+  db_path: ~/.promptopt/promptopt.db
+  
+# 约束配置
+constraints:
+  max_cost: 10.0  # USD per run
+  max_latency: 5000  # ms per sample

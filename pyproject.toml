@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "promptopt"
+version = "0.1.0"
+description = "评估驱动的 Prompt 搜索与回归测试框架"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    { name = "Your Name", email = "you@example.com" }
+]
+keywords = ["prompt", "llm", "evaluation", "optimization", "eval-driven"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "pydantic>=2.0",
+    "sqlalchemy>=2.0",
+    "typer>=0.9",
+    "litellm>=1.0",
+    "pyyaml>=6.0",
+    "httpx>=0.25",
+    "rich>=13.0",
+    "structlog>=23.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+]
+
+[project.scripts]
+promptopt = "promptopt.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/promptopt"
+Repository = "https://github.com/yourusername/promptopt"
+Issues = "https://github.com/yourusername/promptopt/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "YTT", "Q", "RET", "G"]
+ignore = [
+    "E501",
+    "Q000",
+    "RET505",
+]
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "B", "G"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
