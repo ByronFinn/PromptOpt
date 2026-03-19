@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "评估驱动的 Prompt 搜索与回归测试框架"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 authors = [
     { name = "Your Name", email = "you@example.com" }
 ]
@@ -17,9 +17,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
 ]
 
 dependencies = [
@@ -75,5 +73,11 @@ unfixable = []
 "tests/*" = ["S", "B", "G"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.14"
 strict = true
+
+# Python 3.14 best practices
+warn_unused_ignores = true
+warn_redundant_casts = true
+enable_error_code = ["ignore-without-code", "redundant-cast"]
+

@@ -111,6 +111,25 @@ class TestDatasetLoader:
         sample = samples[0]
         assert isinstance(sample.expected, dict)
         assert sample.expected["疾病"] == "慢性支气管炎"
+    
+    def test_load_dataset_config_format(self) -> None:
+        """Test loading Dataset config format (name, path, split_field)."""
+        loader = DatasetLoader(path=str(self.DATA_DIR / "dataset_config.yaml"))
+        samples = loader.load()
+        
+        assert len(samples) == 3
+        assert samples[0].id == "sample_001"
+        assert samples[0].split == Split.DEV
+        assert "咳嗽" in samples[0].input
+    
+    def test_load_dataset_config_with_split_filter(self) -> None:
+        """Test loading Dataset config with split filter."""
+        loader = DatasetLoader(path=str(self.DATA_DIR / "dataset_config.yaml"))
+        samples = loader.load(split=Split.TEST)
+        
+        assert len(samples) == 1
+        assert samples[0].id == "sample_002"
+        assert samples[0].split == Split.TEST
 
 
 class TestSample:
