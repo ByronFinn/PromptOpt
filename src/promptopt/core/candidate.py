@@ -1,8 +1,12 @@
 """Candidate prompt models."""
 
+from __future__ import annotations
+
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -38,5 +42,31 @@ class Candidate(BaseModel):
     description: str | None = None
     metadata: CandidateMetadata = Field(default_factory=lambda: CandidateMetadata(strategy="baseline"))
     created_at: datetime = Field(default_factory=datetime.now)
-    
+
     model_config = ConfigDict(ser_json_timedelta="iso8601")
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> Candidate:
+        """Load a Candidate from a YAML file.
+
+        Args:
+            path: Path to the candidate.yaml file.
+
+        Returns:
+            A Candidate instance parsed from the YAML file.
+
+        Raises:
+            FileNotFoundError: If the YAML file doesn't exist.
+            ValueError: If the YAML content is invalid.
+        """
+        file_path = Path(path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Candidate file not found: {path}")
+
+        with open(file_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+
+        if not isinstance(data, dict):
+            raise ValueError("Candidate YAML must contain a mapping at the root.")
+
+        return cls.model_validate(data)

@@ -1,0 +1,22 @@
+id: test_cand_001
+name: test_candidate
+description: A test candidate prompt
+
+prompt: |
+  从以下医疗文本中抽取信息，并以JSON格式输出：
+
+  {input}
+
+  输出格式：
+  {
+    "疾病": "疾病名称",
+    "症状": ["症状1", "症状2"]
+  }
+
+metadata:
+  strategy: rewrite
+  parent_id: baseline_001
+  teacher_model: gpt-4
+  generation_params:
+    temperature: 0.7
+    max_tokens: 1000
