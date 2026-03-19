@@ -1,11 +1,15 @@
 """Task, Dataset, and Split models."""
 
-from enum import Enum
+from __future__ import annotations
 
+from enum import StrEnum
+from pathlib import Path
+
+import yaml
 from pydantic import BaseModel, Field
 
 
-class Split(str, Enum):
+class Split(StrEnum):
     """Dataset split type."""
     DEV = "dev"
     TEST = "test"
@@ -49,3 +53,29 @@ class Task(BaseModel):
     def format_prompt(self, input_text: str) -> str:
         """Format the prompt template with input text."""
         return self.prompt_template.format(input=input_text)
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> Task:
+        """Load a Task from a YAML file.
+        
+        Args:
+            path: Path to the task.yaml file.
+        
+        Returns:
+            A Task instance parsed from the YAML file.
+        
+        Raises:
+            FileNotFoundError: If the YAML file doesn't exist.
+            ValueError: If the YAML content is invalid.
+        """
+        file_path = Path(path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Task file not found: {path}")
+        
+        with open(file_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        
+        if not isinstance(data, dict):
+            raise ValueError("Task YAML must contain a dictionary at the root.")
+        
+        return cls.model_validate(data)

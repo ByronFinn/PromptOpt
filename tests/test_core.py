@@ -1,5 +1,7 @@
 """Tests for core models."""
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -35,6 +37,8 @@ class TestDataset:
 class TestTask:
     """Tests for Task model."""
     
+    DATA_DIR = Path(__file__).parent / "data"
+    
     def test_valid_task(self):
         task = Task(
             name="test_task",
@@ -54,6 +58,22 @@ class TestTask:
         )
         formatted = task.format_prompt("hello world")
         assert "hello world" in formatted
+    
+    def test_from_yaml(self):
+        """Test loading Task from YAML file."""
+        task = Task.from_yaml(self.DATA_DIR / "task.yaml")
+        assert task.name == "test_task"
+        assert task.description == "A test task for validation"
+        assert task.dataset.name == "test_dataset"
+        assert task.prompt_template == "Extract: {input}"
+        assert task.output_schema == '{"type": "object"}'
+        assert "exact_match" in task.evaluation_metrics
+        assert "json_validator" in task.evaluation_metrics
+    
+    def test_from_yaml_file_not_found(self):
+        """Test that FileNotFoundError is raised for missing file."""
+        with pytest.raises(FileNotFoundError):
+            Task.from_yaml(self.DATA_DIR / "nonexistent.yaml")
 
 
 class TestCandidate:
