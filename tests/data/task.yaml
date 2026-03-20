@@ -1,0 +1,11 @@
+name: test_task
+description: A test task for validation
+dataset:
+  name: test_dataset
+  path: data/test.json
+  split_field: split
+prompt_template: "Extract: {input}"
+output_schema: '{"type": "object"}'
+evaluation_metrics:
+  - exact_match
+  - json_validator
