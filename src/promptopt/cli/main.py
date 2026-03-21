@@ -1,5 +1,6 @@
 """CLI main entry point for PromptOpt."""
 
+import difflib
 import json
 from pathlib import Path
 from typing import Literal
@@ -29,6 +30,7 @@ from promptopt.diagnostics import (
 )
 from promptopt.optimizers import ContractOptimizer, FewShotOptimizer, RewriteOptimizer
 from promptopt.storage import RunModel, SampleResultModel, get_db
+from promptopt.storage.models import CandidateModel, LineageModel
 
 app = typer.Typer(
     name="promptopt",
@@ -211,6 +213,13 @@ def _render_baseline_diff_report(report: BaselineDiffReport) -> None:
         console.print(improvement_table)
 
 
+def _render_prompt_diff(diff_text: str, *, title: str = "Prompt Diff") -> None:
+    if not diff_text.strip():
+        return
+    console.print(f"[blue]{title}:[/blue]")
+    console.print(diff_text)
+
+
 def _resolve_artifact_path(raw_path: str | None, project_root: Path) -> Path:
     if raw_path is None or not raw_path.strip():
         raise ValueError("Run 缺少必要的 artifact 路径，无法恢复上下文。")
@@ -244,6 +253,22 @@ def _build_candidate_file_path(
         if not output_path.exists():
             return output_path
         suffix += 1
+
+
+def _build_prompt_diff_text(
+    from_label: str,
+    from_prompt: str,
+    to_label: str,
+    to_prompt: str,
+) -> str:
+    diff_lines = difflib.unified_diff(
+        from_prompt.splitlines(),
+        to_prompt.splitlines(),
+        fromfile=from_label,
+        tofile=to_label,
+        lineterm="",
+    )
+    return "\n".join(diff_lines)
 
 
 def _normalize_strategies(raw_strategies: str) -> list[str]:
@@ -377,9 +402,40 @@ def _parse_secondary_metrics(raw_secondary: str | None) -> list[str]:
     return [item.strip() for item in raw_secondary.split(",") if item.strip()]
 
 
+def _parse_constraints(raw_constraints: str | None) -> dict[str, float]:
+    if raw_constraints is None or not raw_constraints.strip():
+        return {}
+
+    constraints: dict[str, float] = {}
+    for chunk in raw_constraints.split(","):
+        item = chunk.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise typer.BadParameter(f"无效约束格式: {item}，应为 key=value")
+        key, raw_value = item.split("=", 1)
+        constraint_name = key.strip()
+        value_text = raw_value.strip()
+        try:
+            constraints[constraint_name] = float(value_text)
+        except ValueError as exc:
+            raise typer.BadParameter(f"约束值必须是数值: {item}") from exc
+    return constraints
+
+
+def _merge_constraints(project_config: ProjectConfig, raw_constraints: str | None) -> dict[str, float]:
+    constraints = dict(project_config.constraints)
+    constraints.update(_parse_constraints(raw_constraints))
+    return constraints
+
+
 def _metric_value_for_run(run: RunModel, metric_name: str) -> float:
     if metric_name == "accuracy":
         return float(run.accuracy)
+    if metric_name in {"latency", "latency_ms"}:
+        return float(run.latency_ms)
+    if metric_name == "cost":
+        return float(run.cost)
     try:
         parsed_metrics: object = json.loads(run.aggregate_metrics_json)
     except json.JSONDecodeError:
@@ -398,6 +454,22 @@ def _collect_candidate_files(candidates_dir: Path) -> list[Path]:
     return sorted(
         path for path in candidates_dir.glob("*.y*ml") if path.is_file()
     )
+
+
+def _constraints_failures(run: RunModel, constraints: dict[str, float]) -> list[str]:
+    failures: list[str] = []
+    for key, threshold in constraints.items():
+        if key.startswith("max_"):
+            metric_name = key.removeprefix("max_")
+            metric_value = _metric_value_for_run(run, metric_name)
+            if metric_value > threshold:
+                failures.append(f"{metric_name}={metric_value:.4f} > {threshold:.4f}")
+            continue
+
+        metric_value = _metric_value_for_run(run, key)
+        if metric_value < threshold:
+            failures.append(f"{key}={metric_value:.4f} < {threshold:.4f}")
+    return failures
 
 
 def _select_compatible_runs(seed_run: RunModel, all_runs: list[RunModel]) -> list[RunModel]:
@@ -602,6 +674,7 @@ def diagnose(
     db = get_db(project_config.db_path if project_config else None)
     analyzer = DiagnosticsAnalyzer()
     report: DiagnosticsReport | BaselineDiffReport
+    prompt_diff_text: str | None = None
 
     with db.session() as session:
         run = session.get(RunModel, run_id)
@@ -617,6 +690,9 @@ def diagnose(
         )
         if baseline_run is None:
             report = analyzer.analyze_run(run, sample_results, top_k=top_k)
+            lineage = session.get(LineageModel, run.candidate_id)
+            if lineage is not None and lineage.diff:
+                prompt_diff_text = lineage.diff
         else:
             baseline = session.get(RunModel, baseline_run)
             if baseline is None:
@@ -636,6 +712,15 @@ def diagnose(
                     sample_results,
                     top_k=top_k,
                 )
+                baseline_candidate = session.get(CandidateModel, baseline.candidate_id)
+                candidate_model = session.get(CandidateModel, run.candidate_id)
+                if baseline_candidate is not None and candidate_model is not None:
+                    prompt_diff_text = _build_prompt_diff_text(
+                        baseline.candidate_id,
+                        baseline_candidate.prompt,
+                        run.candidate_id,
+                        candidate_model.prompt,
+                    )
             except ValueError as exc:
                 console.print(f"[red]✗ 无法比较 runs:[/red] {exc}")
                 raise typer.Exit(code=1) from exc
@@ -644,6 +729,8 @@ def diagnose(
         _render_diagnostics_report(report)
     else:
         _render_baseline_diff_report(report)
+    if prompt_diff_text is not None:
+        _render_prompt_diff(prompt_diff_text)
 
     if export_failures is not None:
         if not isinstance(report, DiagnosticsReport):
@@ -832,11 +919,13 @@ def select(
     run_id: str = typer.Argument(..., help="Run ID"),
     primary: str = typer.Option("accuracy", "--primary", help="主要指标"),
     secondary: str | None = typer.Option(None, "--secondary", help="次要指标(逗号分隔)"),
+    constraints: str | None = typer.Option(None, "--constraints", help="约束条件，如 json_validity=1.0,max_latency=5000"),
 ) -> None:
     """选择最优候选."""
     project_config = discover_project_config([Path.cwd()])
     db = get_db(project_config.db_path if project_config else None)
     secondary_metrics = _parse_secondary_metrics(secondary)
+    effective_constraints = _merge_constraints(project_config, constraints) if project_config else _parse_constraints(constraints)
 
     with db.session() as session:
         seed_run = session.get(RunModel, run_id)
@@ -850,8 +939,15 @@ def select(
             console.print("[red]✗ 未找到可比较的已完成 runs。[/red]")
             raise typer.Exit(code=1)
 
+        constrained_runs = [
+            run for run in compatible_runs if not _constraints_failures(run, effective_constraints)
+        ]
+        if not constrained_runs:
+            console.print("[red]✗ 所有候选都未满足约束条件。[/red]")
+            raise typer.Exit(code=1)
+
         selected_run = max(
-            compatible_runs,
+            constrained_runs,
             key=lambda run: tuple(
                 [_metric_value_for_run(run, primary)]
                 + [_metric_value_for_run(run, metric_name) for metric_name in secondary_metrics]
@@ -868,7 +964,7 @@ def select(
             for metric_name in secondary_metrics:
                 table.add_column(metric_name, justify="right")
 
-        for run in compatible_runs:
+        for run in constrained_runs:
             row = [run.id, run.candidate_id, f"{_metric_value_for_run(run, primary):.4f}"]
             for metric_name in secondary_metrics:
                 row.append(f"{_metric_value_for_run(run, metric_name):.4f}")
@@ -879,6 +975,10 @@ def select(
     console.print(f"  Primary: {primary}")
     if secondary_metrics:
         console.print(f"  Secondary: {', '.join(secondary_metrics)}")
+    if effective_constraints:
+        console.print(
+            f"  Constraints: {', '.join(f'{key}={value}' for key, value in effective_constraints.items())}"
+        )
     console.print(f"[green]✓[/green] 选中候选: {selected_candidate_id} ({selected_run_id})")
     console.print(table)
 
@@ -887,14 +987,150 @@ def select(
 def verify(
     run_id: str = typer.Argument(..., help="Run ID"),
     split: str = typer.Option("test", "--split", "-s", help="数据集划分"),
+    baseline_run: str | None = typer.Option(None, "--baseline-run", help="用于回归检测的 baseline run ID"),
+    constraints: str | None = typer.Option(None, "--constraints", help="约束条件，如 json_validity=1.0,max_latency=5000"),
 ) -> None:
     """测试集验证."""
+    split_value = _parse_split(split)
+    run, _sample_results, project_config = _load_run_and_samples_or_exit(run_id)
+    analyzer = DiagnosticsAnalyzer()
+    effective_constraints = _merge_constraints(project_config, constraints)
+
+    try:
+        task_path, candidate_path, task_spec, candidate_spec = _load_task_candidate_context_from_run(
+            run,
+            project_config,
+        )
+        config_path = project_config.config_path
+        if config_path is None:
+            raise ValueError("未找到 .promptopt.yaml 路径。")
+        dataset_path = _resolve_artifact_path(run.dataset_path, config_path.parent)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]✗ 无法恢复验证上下文:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    dataset_loader = DatasetLoader(path=str(dataset_path), split_field=task_spec.dataset.split_field)
+    engine = EvaluationEngine(
+        adapter=build_model_adapter(project_config),
+        evaluators=build_evaluators(task_spec.evaluation_metrics),
+        db=get_db(project_config.db_path),
+        timeout=project_config.timeout,
+    )
+    result = engine.run(
+        task=task_spec,
+        candidate=candidate_spec,
+        dataset=dataset_loader,
+        split=split_value,
+        task_path=task_path,
+        candidate_path=candidate_path,
+        dataset_path=dataset_path,
+    )
+
+    gate_failures = _constraints_failures(
+        RunModel(
+            id=result.run_id,
+            task_id=task_spec.name,
+            candidate_id=candidate_spec.id,
+            split=split_value.value,
+            status="completed",
+            accuracy=result.accuracy,
+            aggregate_metrics_json=json.dumps(result.aggregate_metrics, ensure_ascii=False, sort_keys=True),
+            cost=result.cost,
+            latency_ms=result.latency_ms,
+        ),
+        effective_constraints,
+    )
+    regression_messages: list[str] = []
+
+    if baseline_run is not None:
+        db = get_db(project_config.db_path)
+        with db.session() as session:
+            baseline = session.get(RunModel, baseline_run)
+            if baseline is None:
+                console.print(f"[red]✗ 未找到 Baseline Run:[/red] {baseline_run}")
+                raise typer.Exit(code=1)
+            baseline_sample_results = (
+                session.query(SampleResultModel)
+                .filter(SampleResultModel.run_id == baseline_run)
+                .order_by(SampleResultModel.sample_id.asc())
+                .all()
+            )
+            verify_run = session.get(RunModel, result.run_id)
+            if verify_run is None:
+                raise ValueError(f"Verify run not found: {result.run_id}")
+            verify_sample_results = (
+                session.query(SampleResultModel)
+                .filter(SampleResultModel.run_id == result.run_id)
+                .order_by(SampleResultModel.sample_id.asc())
+                .all()
+            )
+
+        diff_report = analyzer.compare_runs(
+            baseline,
+            baseline_sample_results,
+            verify_run,
+            verify_sample_results,
+            top_k=max(len(verify_sample_results), 1),
+        )
+        regressed_slices = analyzer.detect_slice_regressions(
+            baseline_sample_results,
+            verify_sample_results,
+        )
+        regression_count = diff_report.still_failed + len(diff_report.regressions)
+        if diff_report.regressions:
+            regression_messages.append(
+                f"出现 {len(diff_report.regressions)} 个退化样本"
+            )
+        if regressed_slices:
+            regression_messages.append(
+                "关键 slice 退化: "
+                + ", ".join(
+                    f"{slice_name}({baseline_accuracy:.2%}->{candidate_accuracy:.2%})"
+                    for slice_name, (baseline_accuracy, candidate_accuracy) in regressed_slices.items()
+                )
+            )
+        if regression_count:
+            console.print(f"[yellow]⚠[/yellow] Regression summary: {regression_count} 个失败/退化样本")
+        _render_baseline_diff_report(diff_report)
+
     console.print("[blue]测试集验证:[/blue]")
-    console.print(f"  Run: {run_id}")
-    console.print(f"  Split: {split}")
-    
-    # Placeholder - actual verification logic goes here
-    console.print("[yellow]验证功能开发中...[/yellow]")
+    console.print(f"  Source Run: {run_id}")
+    console.print(f"  Verify Split: {split_value.value}")
+
+    summary_table = Table(title=f"验证结果 · {result.run_id}")
+    summary_table.add_column("字段", style="cyan")
+    summary_table.add_column("值", style="green")
+    summary_table.add_row("Task", task_spec.name)
+    summary_table.add_row("Candidate", candidate_spec.id)
+    summary_table.add_row("Model", engine.model_name)
+    summary_table.add_row("Split", split_value.value)
+    summary_table.add_row("Samples", str(result.total_samples))
+    summary_table.add_row("Accuracy", f"{result.accuracy:.2%}")
+    summary_table.add_row("Latency", f"{result.latency_ms:.2f} ms/sample")
+    console.print(summary_table)
+
+    if result.aggregate_metrics:
+        metrics_table = Table(title="验证指标")
+        metrics_table.add_column("指标", style="magenta")
+        metrics_table.add_column("值", style="yellow", justify="right")
+        for metric_name, metric_value in sorted(result.aggregate_metrics.items()):
+            metrics_table.add_row(metric_name, f"{metric_value:.4f}")
+        console.print(metrics_table)
+
+    if effective_constraints:
+        console.print(
+            f"  Constraints: {', '.join(f'{key}={value}' for key, value in effective_constraints.items())}"
+        )
+
+    if gate_failures or regression_messages:
+        console.print("[red]✗ Verify gate 未通过:[/red]")
+        for failure in gate_failures:
+            console.print(f"- Constraint failure: {failure}")
+        for message in regression_messages:
+            console.print(f"- Regression failure: {message}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]✓[/green] Verify Run 已保存: {result.run_id}")
 
 
 @app.command()
@@ -925,6 +1161,44 @@ def list_runs() -> None:
             )
     
     console.print(table)
+
+
+@app.command()
+def rollback(
+    candidate_id: str = typer.Argument(..., help="历史 Candidate ID"),
+    output: Path | None = typer.Option(None, "--output", "-o", help="回滚候选输出路径或目录"),
+) -> None:
+    """导出历史 candidate，生成弱回滚 YAML 工件。"""
+    project_config = discover_project_config([Path.cwd()])
+    db = get_db(project_config.db_path if project_config else None)
+
+    with db.session() as session:
+        candidate_model = session.get(CandidateModel, candidate_id)
+        if candidate_model is None:
+            console.print(f"[red]✗ 未找到 Candidate:[/red] {candidate_id}")
+            raise typer.Exit(code=1)
+
+    rollback_candidate = Candidate(
+        id=f"{candidate_id}_rollback",
+        name=f"{candidate_model.name}_rollback",
+        description=f"Rollback candidate restored from {candidate_id}",
+        prompt=candidate_model.prompt,
+        metadata=CandidateMetadata(
+            strategy="baseline",
+            parent_id=candidate_id,
+            generation_params={"rollback_source": candidate_id},
+        ),
+    )
+
+    if output is None:
+        output_path = _build_candidate_file_path(Path.cwd() / "candidates", rollback_candidate.id)
+    elif output.suffix.lower() in {".yaml", ".yml"}:
+        output_path = output
+    else:
+        output_path = _build_candidate_file_path(output, rollback_candidate.id)
+
+    _write_candidate_yaml(rollback_candidate, output_path)
+    console.print(f"[green]✓[/green] 已导出回滚候选: {output_path}")
 
 
 @app.command()

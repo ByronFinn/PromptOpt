@@ -146,9 +146,9 @@
 
 ---
 
-## M4: 回归门禁与上线控制 🔨 进行中
+## M4: 回归门禁与上线控制 ✅ 已完成
 
-> 当前状态：M3 搜索闭环已打通，下一步优先实现 `verify` test gate，并在此基础上补 regression detection / constraints / rollback / prompt diff review。
+> 当前状态：`verify` test gate、regression detection、constraints、弱回滚与 prompt diff review 已落地，可支撑候选验证与上线前审查。
 
 ### 目标
 
@@ -158,18 +158,18 @@
 
 | # | Issue | 描述 | 验收标准 |
 |---|-------|------|----------|
-| 23 | **[实现 `promptopt verify`](https://github.com/yourusername/promptopt/issues/23)** | 在 held-out test 集上验证 | `promptopt verify <run_id> --split test` |
-| 24 | **[实现 regression detection](https://github.com/yourusername/promptopt/issues/24)** | 检测新候选是否降低关键 slice 指标 | 关键 slice 不得退化 |
-| 25 | **[实现约束检查](https://github.com/yourusername/promptopt/issues/25)** | JSON validity 100%、成本/延迟预算 | 不满足约束的候选自动拒绝 |
-| 26 | **[实现回滚机制](https://github.com/yourusername/promptopt/issues/26)** | 一键回滚到历史 candidate | `promptopt rollback <candidate_id>` |
-| 27 | **[实现 prompt diff review](https://github.com/yourusername/promptopt/issues/27)** | 生成 prompt 变更对比报告 | side-by-side diff 输出 |
+| 23 | **[实现 `promptopt verify`](https://github.com/yourusername/promptopt/issues/23)** | 在 held-out test 集上验证 | ✅ 已完成 |
+| 24 | **[实现 regression detection](https://github.com/yourusername/promptopt/issues/24)** | 检测新候选是否降低关键 slice 指标 | ✅ 已完成基础版 |
+| 25 | **[实现约束检查](https://github.com/yourusername/promptopt/issues/25)** | JSON validity 100%、成本/延迟预算 | ✅ 已完成基础版 |
+| 26 | **[实现回滚机制](https://github.com/yourusername/promptopt/issues/26)** | 一键回滚到历史 candidate | ✅ 已完成弱回滚版本 |
+| 27 | **[实现 prompt diff review](https://github.com/yourusername/promptopt/issues/27)** | 生成 prompt 变更对比报告 | ✅ 已完成基础版 |
 
 ### M4 验收标准
 
-- [ ] 新 prompt 不得降低关键 slice
-- [ ] JSON validity 必须 100%
-- [ ] 成本/延迟超预算时告警
-- [ ] 可一键回滚
+- [x] 新 prompt 不得降低关键 slice
+- [x] JSON validity 必须 100%
+- [x] 成本/延迟超预算时告警
+- [x] 可一键回滚
 
 ### M4 成果标志
 
@@ -177,7 +177,9 @@
 
 ---
 
-## M5: 集成到开发工作流（Prompt CI）🛠 待开始
+## M5: 集成到开发工作流（Prompt CI）🔨 进行中
+
+> 当前状态：门禁链路已打通，下一步优先让 `verify/search/select/diagnose` 支持 quiet/json/report，并补 CI 退出码与 GitHub Actions 示例。
 
 ### 目标
 

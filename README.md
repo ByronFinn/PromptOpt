@@ -281,7 +281,7 @@ promptopt/
 
 ## Roadmap
 
-> 当前进度：`v0.3` 主链已打通（optimize / search / select / lineage），下一步聚焦回归门禁与上线控制。
+> 当前进度：工程主链已打通到回归门禁（verify / regression / constraints / rollback / prompt diff），下一步聚焦 Prompt CI。
 
 ### v0.1
 

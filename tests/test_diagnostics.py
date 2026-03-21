@@ -179,6 +179,7 @@ storage:
     assert "Baseline Diff" in result.output
     assert "退化样本" in result.output
     assert "提升样本" in result.output
+    assert "Prompt Diff" in result.output
 
 
 def test_diagnose_command_rejects_incompatible_runs(tmp_path: Path, monkeypatch) -> None:
@@ -316,7 +317,11 @@ def _seed_diff_runs(db: Database) -> tuple[str, str]:
                 CandidateModel(
                     id=candidate_id_value,
                     name=candidate_name,
-                    prompt="{input}",
+                    prompt=(
+                        "{input}"
+                        if candidate_id_value == baseline_candidate_id
+                        else "你是一名结构化抽取专家。\n\n{input}"
+                    ),
                     strategy="baseline" if candidate_id_value == baseline_candidate_id else "rewrite",
                 )
             )

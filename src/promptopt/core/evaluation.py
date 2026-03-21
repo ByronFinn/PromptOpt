@@ -44,6 +44,7 @@ class ProjectConfig:
     teacher_model: str | None = None
     teacher_base_url: str | None = None
     local_model_base_urls: dict[str, str] = field(default_factory=dict)
+    constraints: dict[str, float] = field(default_factory=dict)
     db_path: str | None = None
     batch_size: int = 1
     max_workers: int = 1
@@ -88,6 +89,9 @@ class ProjectConfig:
             if isinstance(db_path_raw, str) and db_path_raw.strip():
                 db_path = _resolve_config_path(path.parent, db_path_raw.strip())
 
+        constraints_raw = loaded.get("constraints", {})
+        constraints = _collect_numeric_constraints(constraints_raw)
+
         evaluation_raw = loaded.get("evaluation", {})
         batch_size = 1
         max_workers = 1
@@ -104,6 +108,7 @@ class ProjectConfig:
             teacher_model=teacher_model,
             teacher_base_url=teacher_base_url,
             local_model_base_urls=local_model_base_urls,
+            constraints=constraints,
             db_path=db_path,
             batch_size=batch_size,
             max_workers=max_workers,
@@ -562,6 +567,21 @@ def _collect_local_model_base_urls(models_raw: dict[str, object]) -> dict[str, s
         if isinstance(base_url_raw, str) and base_url_raw.strip():
             base_urls[normalize_model_name(name_raw)] = base_url_raw.strip()
     return base_urls
+
+
+def _collect_numeric_constraints(raw_constraints: object) -> dict[str, float]:
+    if not isinstance(raw_constraints, dict):
+        return {}
+
+    constraints: dict[str, float] = {}
+    for key, value in raw_constraints.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            constraints[key] = float(value)
+    return constraints
 
 
 def _resolve_config_path(base_dir: Path, raw_path: str) -> str:

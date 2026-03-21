@@ -12,7 +12,7 @@ from promptopt.cli import main as cli_main
 from promptopt.cli.main import app
 from promptopt.models.base import ModelAdapter
 from promptopt.storage.database import Database, reset_db
-from promptopt.storage.models import LineageModel, RunModel
+from promptopt.storage.models import CandidateModel, LineageModel, RunModel
 
 RUNNER = CliRunner()
 
@@ -121,11 +121,41 @@ def test_search_command_runs_all_candidates_and_select_picks_best(
             "accuracy",
             "--secondary",
             "json_validity",
+            "--constraints",
+            "json_validity=1.0",
         ],
     )
 
     assert select_result.exit_code == 0, select_result.output
     assert "选中候选: rewrite_001" in select_result.output
+    assert "Constraints:" in select_result.output
+
+
+def test_rollback_command_exports_candidate_yaml(tmp_path: Path, monkeypatch) -> None:
+    reset_db()
+    project_dir, db_path = _seed_search_project(tmp_path / "rollback_project")
+    monkeypatch.chdir(project_dir)
+
+    db = Database(str(db_path))
+    db.create_tables()
+    with db.session() as session:
+        session.add(
+            CandidateModel(
+                id="legacy_001",
+                name="legacy_prompt",
+                prompt="请输出 JSON\n\n{input}",
+                strategy="baseline",
+            )
+        )
+
+    output_path = project_dir / "rollback" / "legacy_rollback.yaml"
+    result = RUNNER.invoke(app, ["rollback", "legacy_001", "--output", str(output_path)])
+
+    assert result.exit_code == 0, result.output
+    assert output_path.exists()
+    exported = output_path.read_text(encoding="utf-8")
+    assert "legacy_001_rollback" in exported
+    assert "rollback_source" in exported
 
 
 

@@ -156,6 +156,32 @@ class DiagnosticsAnalyzer:
             encoding="utf-8",
         )
 
+    def detect_slice_regressions(
+        self,
+        baseline_sample_results: Sequence[SampleResultModel],
+        candidate_sample_results: Sequence[SampleResultModel],
+    ) -> dict[str, tuple[float, float]]:
+        """Return slices whose candidate accuracy is lower than the baseline."""
+        baseline_slices = self._compute_slice_metrics(baseline_sample_results)
+        candidate_slices = self._compute_slice_metrics(candidate_sample_results)
+
+        regressed_slices: dict[str, tuple[float, float]] = {}
+        for slice_name in sorted(set(baseline_slices) & set(candidate_slices)):
+            baseline_accuracy = baseline_slices[slice_name].get("accuracy")
+            candidate_accuracy = candidate_slices[slice_name].get("accuracy")
+            baseline_total = baseline_slices[slice_name].get("total")
+            candidate_total = candidate_slices[slice_name].get("total")
+
+            if not isinstance(baseline_total, int) or baseline_total == 0:
+                continue
+            if not isinstance(candidate_total, int) or candidate_total == 0:
+                continue
+            if not isinstance(baseline_accuracy, float) or not isinstance(candidate_accuracy, float):
+                continue
+            if candidate_accuracy < baseline_accuracy:
+                regressed_slices[slice_name] = (baseline_accuracy, candidate_accuracy)
+        return regressed_slices
+
     def compare_runs(
         self,
         baseline_run: RunModel,
