@@ -114,9 +114,9 @@
 
 ---
 
-## M3: 候选生成与搜索闭环成立 🔨 进行中
+## M3: 候选生成与搜索闭环成立 ✅ 已完成
 
-> 当前状态：M2 的反馈链路已打通，下一步聚焦 `Rewrite/Fewshot/Contract` 候选生成与 `optimize/select` 主链。
+> 当前状态：`rewrite/fewshot/contract` 候选生成、`optimize/search/select` 主链与基础 lineage 持久化已落地，可批量生成并选择候选。
 
 ### 目标
 
@@ -126,19 +126,19 @@
 
 | # | Issue | 描述 | 验收标准 |
 |---|-------|------|----------|
-| 16 | **[实现 RewriteOptimizer](https://github.com/yourusername/promptopt/issues/16)** | 基于 LLM 重写指令 | 能生成 3+ 个 instruction 变体 |
-| 17 | **[实现 FewshotOptimizer](https://github.com/yourusername/promptopt/issues/17)** | 生成 few-shot 示例 | 能从 dev 集自动选取示例 |
-| 18 | **[实现 ContractOptimizer](https://github.com/yourusername/promptopt/issues/18)** | 强化 JSON 输出约束 | 能生成更严格的 schema 约束 |
-| 19 | **[实现 `promptopt optimize`](https://github.com/yourusername/promptopt/issues/19)** | CLI 集成候选生成 | `promptopt optimize <run_id> --strategies rewrite,fewshot` |
-| 20 | **[实现多候选并行评估](https://github.com/yourusername/promptopt/issues/20)** | 批量评估 N 个候选 | 支持并行评估，输出 comparison table |
-| 21 | **[实现 `promptopt select`](https://github.com/yourusername/promptopt/issues/21)** | 按指标选择最优候选 | 支持 primary/secondary 指标约束 |
-| 22 | **[实现候选 lineage 追踪](https://github.com/yourusername/promptopt/issues/22)** | 记录候选的父子关系和 diff | lineage 可视化 |
+| 16 | **[实现 RewriteOptimizer](https://github.com/yourusername/promptopt/issues/16)** | 基于 LLM 重写指令 | ✅ 已完成 |
+| 17 | **[实现 FewshotOptimizer](https://github.com/yourusername/promptopt/issues/17)** | 生成 few-shot 示例 | ✅ 已完成基础版 |
+| 18 | **[实现 ContractOptimizer](https://github.com/yourusername/promptopt/issues/18)** | 强化 JSON 输出约束 | ✅ 已完成基础版 |
+| 19 | **[实现 `promptopt optimize`](https://github.com/yourusername/promptopt/issues/19)** | CLI 集成候选生成 | ✅ 已完成 |
+| 20 | **[实现多候选并行评估](https://github.com/yourusername/promptopt/issues/20)** | 批量评估 N 个候选 | ✅ 已完成基础版 |
+| 21 | **[实现 `promptopt select`](https://github.com/yourusername/promptopt/issues/21)** | 按指标选择最优候选 | ✅ 已完成第一版 |
+| 22 | **[实现候选 lineage 追踪](https://github.com/yourusername/promptopt/issues/22)** | 记录候选的父子关系和 diff | ✅ 已完成基础版 |
 
 ### M3 验收标准
 
-- [ ] 给定 baseline，能自动生成 12+ 个候选
-- [ ] 批量评估后能选出满足约束的最优候选
-- [ ] 输出 candidate lineage 和 diff
+- [x] 给定 baseline，能自动生成 12+ 个候选
+- [x] 批量评估后能选出满足约束的最优候选
+- [x] 输出 candidate lineage 和 diff
 
 ### M3 成果标志
 
@@ -146,7 +146,9 @@
 
 ---
 
-## M4: 回归门禁与上线控制 🛠 待开始
+## M4: 回归门禁与上线控制 🔨 进行中
+
+> 当前状态：M3 搜索闭环已打通，下一步优先实现 `verify` test gate，并在此基础上补 regression detection / constraints / rollback / prompt diff review。
 
 ### 目标
 

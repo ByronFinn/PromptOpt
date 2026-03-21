@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 import yaml
+from sqlalchemy.orm import Session
 
 from promptopt.core.candidate import Candidate
 from promptopt.core.dataset import DatasetLoader, Sample
@@ -25,7 +27,12 @@ from promptopt.evaluators import (
 )
 from promptopt.models import LiteLLMAdapter, ModelAdapter
 from promptopt.storage.database import Database, get_db
-from promptopt.storage.models import CandidateModel, RunModel, SampleResultModel
+from promptopt.storage.models import (
+    CandidateModel,
+    LineageModel,
+    RunModel,
+    SampleResultModel,
+)
 
 
 @dataclass(slots=True)
@@ -35,6 +42,8 @@ class ProjectConfig:
     target_model: str
     target_base_url: str | None = None
     teacher_model: str | None = None
+    teacher_base_url: str | None = None
+    local_model_base_urls: dict[str, str] = field(default_factory=dict)
     db_path: str | None = None
     batch_size: int = 1
     max_workers: int = 1
@@ -66,7 +75,11 @@ class ProjectConfig:
         if isinstance(teacher_model_raw, str) and teacher_model_raw.strip():
             teacher_model = normalize_model_name(teacher_model_raw.strip())
 
-        target_base_url = _resolve_local_model_base_url(models_raw, target_model)
+        local_model_base_urls = _collect_local_model_base_urls(models_raw)
+        target_base_url = local_model_base_urls.get(target_model)
+        teacher_base_url = (
+            local_model_base_urls.get(teacher_model) if teacher_model is not None else None
+        )
 
         storage_raw = loaded.get("storage", {})
         db_path = None
@@ -89,6 +102,8 @@ class ProjectConfig:
             target_model=target_model,
             target_base_url=target_base_url,
             teacher_model=teacher_model,
+            teacher_base_url=teacher_base_url,
+            local_model_base_urls=local_model_base_urls,
             db_path=db_path,
             batch_size=batch_size,
             max_workers=max_workers,
@@ -309,6 +324,8 @@ class EvaluationEngine:
                 candidate_model.parent_id = candidate.metadata.parent_id
                 candidate_model.teacher_model = candidate.metadata.teacher_model
 
+            self._upsert_lineage_record(session=session, candidate=candidate)
+
             session.add(
                 RunModel(
                     id=run_id,
@@ -377,6 +394,56 @@ class EvaluationEngine:
                     )
                 )
 
+    def _upsert_lineage_record(self, *, session: Session, candidate: Candidate) -> None:
+        lineage = session.get(LineageModel, candidate.id)
+        parent_id = candidate.metadata.parent_id
+        change_type = candidate.metadata.strategy
+
+        ancestors: list[str] = []
+        prompt_diff: str | None = None
+
+        if parent_id is not None:
+            parent_lineage = session.get(LineageModel, parent_id)
+            if parent_lineage is not None:
+                try:
+                    parsed_ancestors: object = json.loads(parent_lineage.ancestors)
+                except json.JSONDecodeError:
+                    parsed_ancestors = []
+                if isinstance(parsed_ancestors, list):
+                    ancestors.extend(
+                        ancestor for ancestor in parsed_ancestors if isinstance(ancestor, str)
+                    )
+            if parent_id not in ancestors:
+                ancestors.append(parent_id)
+
+            parent_candidate = session.get(CandidateModel, parent_id)
+            if parent_candidate is not None:
+                diff_lines = difflib.unified_diff(
+                    parent_candidate.prompt.splitlines(),
+                    candidate.prompt.splitlines(),
+                    fromfile=parent_id,
+                    tofile=candidate.id,
+                    lineterm="",
+                )
+                prompt_diff = "\n".join(diff_lines)
+
+        if lineage is None:
+            session.add(
+                LineageModel(
+                    candidate_id=candidate.id,
+                    ancestors=json.dumps(ancestors, ensure_ascii=False),
+                    parent_id=parent_id,
+                    change_type=change_type,
+                    diff=prompt_diff,
+                )
+            )
+            return
+
+        lineage.ancestors = json.dumps(ancestors, ensure_ascii=False)
+        lineage.parent_id = parent_id
+        lineage.change_type = change_type
+        lineage.diff = prompt_diff
+
     def _mark_run_failed(
         self,
         *,
@@ -423,11 +490,43 @@ def build_evaluators(metric_names: Sequence[str]) -> list[Evaluator]:
     return evaluators
 
 
-def build_model_adapter(config: ProjectConfig) -> ModelAdapter:
-    """Build the target model adapter from project config."""
+def build_model_adapter(
+    config: ProjectConfig,
+    *,
+    model_name: str | None = None,
+    base_url: str | None = None,
+) -> ModelAdapter:
+    """Build a model adapter from project config."""
+    resolved_model = config.target_model if model_name is None else normalize_model_name(model_name)
+    resolved_base_url = (
+        config.target_base_url if model_name is None else config.local_model_base_urls.get(resolved_model)
+    )
+    if base_url is not None:
+        resolved_base_url = base_url
+
     return LiteLLMAdapter(
-        model=config.target_model,
-        base_url=config.target_base_url,
+        model=resolved_model,
+        base_url=resolved_base_url,
+    )
+
+
+def build_teacher_model_adapter(
+    config: ProjectConfig,
+    *,
+    teacher_model: str | None = None,
+) -> ModelAdapter:
+    """Build the teacher model adapter used by optimize/search workflows."""
+    resolved_teacher = config.teacher_model if teacher_model is None else normalize_model_name(teacher_model)
+    if resolved_teacher is None:
+        raise ValueError("未配置 teacher 模型，请在 .promptopt.yaml 中设置 models.teacher 或显式传入 --teacher。")
+
+    resolved_base_url = config.local_model_base_urls.get(resolved_teacher)
+    if teacher_model is None:
+        resolved_base_url = config.teacher_base_url
+    return build_model_adapter(
+        config,
+        model_name=resolved_teacher,
+        base_url=resolved_base_url,
     )
 
 
@@ -446,10 +545,12 @@ def render_prompt(template: str, input_text: str) -> str:
     return template.replace("{input}", input_text)
 
 
-def _resolve_local_model_base_url(models_raw: dict[str, object], target_model: str) -> str | None:
+def _collect_local_model_base_urls(models_raw: dict[str, object]) -> dict[str, str]:
     local_models = models_raw.get("local")
     if not isinstance(local_models, list):
-        return None
+        return {}
+
+    base_urls: dict[str, str] = {}
 
     for item in local_models:
         if not isinstance(item, dict):
@@ -457,12 +558,10 @@ def _resolve_local_model_base_url(models_raw: dict[str, object], target_model: s
         name_raw = item.get("name")
         if not isinstance(name_raw, str):
             continue
-        if normalize_model_name(name_raw) != target_model:
-            continue
         base_url_raw = item.get("base_url")
         if isinstance(base_url_raw, str) and base_url_raw.strip():
-            return base_url_raw.strip()
-    return None
+            base_urls[normalize_model_name(name_raw)] = base_url_raw.strip()
+    return base_urls
 
 
 def _resolve_config_path(base_dir: Path, raw_path: str) -> str:

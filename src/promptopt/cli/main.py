@@ -1,19 +1,25 @@
 """CLI main entry point for PromptOpt."""
 
+import json
 from pathlib import Path
+from typing import Literal
 
 import typer
+import yaml
 from rich.console import Console
 from rich.table import Table
 
 from promptopt.core import (
     Candidate,
+    CandidateMetadata,
     DatasetLoader,
     EvaluationEngine,
+    ProjectConfig,
     Split,
     Task,
     build_evaluators,
     build_model_adapter,
+    build_teacher_model_adapter,
     discover_project_config,
 )
 from promptopt.diagnostics import (
@@ -21,6 +27,7 @@ from promptopt.diagnostics import (
     DiagnosticsAnalyzer,
     DiagnosticsReport,
 )
+from promptopt.optimizers import ContractOptimizer, FewShotOptimizer, RewriteOptimizer
 from promptopt.storage import RunModel, SampleResultModel, get_db
 
 app = typer.Typer(
@@ -30,6 +37,8 @@ app = typer.Typer(
 )
 
 console = Console()
+
+type OptimizerStrategy = Literal["rewrite", "fewshot", "contract"]
 
 
 def _parse_split(raw_value: str) -> Split:
@@ -200,6 +209,210 @@ def _render_baseline_diff_report(report: BaselineDiffReport) -> None:
                 _truncate_text(sample_diff.input_text, limit=36),
             )
         console.print(improvement_table)
+
+
+def _resolve_artifact_path(raw_path: str | None, project_root: Path) -> Path:
+    if raw_path is None or not raw_path.strip():
+        raise ValueError("Run 缺少必要的 artifact 路径，无法恢复上下文。")
+
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return (project_root / candidate).resolve()
+
+
+def _write_candidate_yaml(candidate: Candidate, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = candidate.model_dump(mode="json")
+    output_path.write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _build_candidate_file_path(
+    parent_dir: Path,
+    candidate_id: str,
+) -> Path:
+    output_path = parent_dir / f"{candidate_id}.yaml"
+    if not output_path.exists():
+        return output_path
+
+    suffix = 2
+    while True:
+        output_path = parent_dir / f"{candidate_id}_{suffix:02d}.yaml"
+        if not output_path.exists():
+            return output_path
+        suffix += 1
+
+
+def _normalize_strategies(raw_strategies: str) -> list[str]:
+    return [item.strip() for item in raw_strategies.split(",") if item.strip()]
+
+
+def _coerce_optimizer_strategies(raw_strategies: list[str]) -> list[OptimizerStrategy]:
+    strategies: list[OptimizerStrategy] = []
+    for item in raw_strategies:
+        if item == "rewrite":
+            strategies.append("rewrite")
+        elif item == "fewshot":
+            strategies.append("fewshot")
+        elif item == "contract":
+            strategies.append("contract")
+    return strategies
+
+
+def _build_optimize_eval_payload(report: DiagnosticsReport) -> dict[str, object]:
+    return {
+        "run_id": report.run_id,
+        "task_id": report.task_id,
+        "accuracy": report.accuracy,
+        "aggregate_metrics": report.aggregate_metrics,
+        "slice_metrics": report.slice_metrics,
+        "suggestions": report.suggestions,
+        "top_failures": report.top_failures,
+    }
+
+
+def _resolve_project_config_or_exit(candidate_paths: list[Path]) -> ProjectConfig:
+    project_config = discover_project_config(candidate_paths)
+    if project_config is None:
+        console.print("[red]✗ 未找到 .promptopt.yaml，请在项目根目录提供运行配置。[/red]")
+        raise typer.Exit(code=1)
+    return project_config
+
+
+def _load_run_and_samples_or_exit(
+    run_id: str,
+) -> tuple[RunModel, list[SampleResultModel], ProjectConfig]:
+    initial_config = discover_project_config([Path.cwd()])
+    db = get_db(initial_config.db_path if initial_config else None)
+
+    with db.session() as session:
+        run = session.get(RunModel, run_id)
+        if run is None:
+            console.print(f"[red]✗ 未找到 Run:[/red] {run_id}")
+            raise typer.Exit(code=1)
+        sample_results = (
+            session.query(SampleResultModel)
+            .filter(SampleResultModel.run_id == run_id)
+            .order_by(SampleResultModel.sample_id.asc())
+            .all()
+        )
+        run_task_path = run.task_path
+        run_candidate_path = run.candidate_path
+
+    project_config = _resolve_project_config_or_exit(
+        [
+            Path.cwd(),
+            Path(run_task_path) if run_task_path is not None else Path.cwd(),
+            Path(run_candidate_path) if run_candidate_path is not None else Path.cwd(),
+        ]
+    )
+    return run, sample_results, project_config
+
+
+def _load_task_candidate_context_from_run(
+    run: RunModel,
+    project_config: ProjectConfig,
+) -> tuple[Path, Path, Task, Candidate]:
+    config_path = project_config.config_path
+    if config_path is None:
+        raise ValueError("未找到 .promptopt.yaml 路径。")
+
+    project_root = config_path.parent
+    task_path = _resolve_artifact_path(run.task_path, project_root)
+    candidate_path = _resolve_artifact_path(run.candidate_path, project_root)
+    task_spec = Task.from_yaml(task_path)
+    parent_candidate = Candidate.from_yaml(candidate_path)
+    return task_path, candidate_path, task_spec, parent_candidate
+
+
+def _instantiate_optimizer(
+    strategy: OptimizerStrategy,
+) -> RewriteOptimizer | FewShotOptimizer | ContractOptimizer:
+    if strategy == "rewrite":
+        return RewriteOptimizer()
+    if strategy == "fewshot":
+        return FewShotOptimizer()
+    if strategy == "contract":
+        return ContractOptimizer()
+    raise ValueError(f"不支持的优化策略: {strategy}")
+
+
+def _build_generation_kwargs(
+    *,
+    strategy: OptimizerStrategy,
+    teacher_adapter: object,
+    num_candidates: int,
+    sample_results: list[SampleResultModel],
+    task_spec: Task,
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "num_candidates": num_candidates,
+    }
+    if strategy == "rewrite":
+        kwargs.update(
+            {
+                "teacher_adapter": teacher_adapter,
+                "temperature": 0.7,
+                "max_tokens": 2048,
+            }
+        )
+    elif strategy == "fewshot":
+        kwargs.update(
+            {
+                "sample_results": sample_results,
+                "max_examples": min(3, max(1, num_candidates)),
+            }
+        )
+    elif strategy == "contract":
+        kwargs.update({"output_schema": task_spec.output_schema})
+    return kwargs
+
+
+def _parse_secondary_metrics(raw_secondary: str | None) -> list[str]:
+    if raw_secondary is None:
+        return []
+    return [item.strip() for item in raw_secondary.split(",") if item.strip()]
+
+
+def _metric_value_for_run(run: RunModel, metric_name: str) -> float:
+    if metric_name == "accuracy":
+        return float(run.accuracy)
+    try:
+        parsed_metrics: object = json.loads(run.aggregate_metrics_json)
+    except json.JSONDecodeError:
+        return 0.0
+    if not isinstance(parsed_metrics, dict):
+        return 0.0
+    value = parsed_metrics.get(metric_name)
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    return 0.0
+
+
+def _collect_candidate_files(candidates_dir: Path) -> list[Path]:
+    return sorted(
+        path for path in candidates_dir.glob("*.y*ml") if path.is_file()
+    )
+
+
+def _select_compatible_runs(seed_run: RunModel, all_runs: list[RunModel]) -> list[RunModel]:
+    compatible_runs: list[RunModel] = []
+    for run in all_runs:
+        if run.status != "completed":
+            continue
+        if run.task_id != seed_run.task_id or run.split != seed_run.split:
+            continue
+        if seed_run.dataset_path is not None and run.dataset_path != seed_run.dataset_path:
+            continue
+        if seed_run.model_name is not None and run.model_name != seed_run.model_name:
+            continue
+        compatible_runs.append(run)
+    return compatible_runs
 
 PROMPTOPT_CONFIG_TEMPLATE = """# PromptOpt Local Configuration
 
@@ -443,19 +656,117 @@ def diagnose(
 @app.command()
 def optimize(
     run_id: str = typer.Argument(..., help="Run ID"),
-    teacher: str = typer.Option("openai/gpt-4", "--teacher", help="Teacher 模型"),
-    strategies: str = typer.Option("rewrite,fewshot", "--strategies", help="优化策略"),
+    teacher: str | None = typer.Option(None, "--teacher", help="Teacher 模型，默认读取 .promptopt.yaml"),
+    strategies: str = typer.Option("rewrite", "--strategies", help="优化策略"),
     num_candidates: int = typer.Option(12, "--num-candidates", help="生成候选数量"),
 ) -> None:
     """生成候选 Prompt 优化."""
+    raw_strategy_list = _normalize_strategies(strategies)
+    strategy_list = _coerce_optimizer_strategies(raw_strategy_list)
+    unsupported_strategies = [
+        item for item in raw_strategy_list if item not in {"rewrite", "fewshot", "contract"}
+    ]
+    if not strategy_list:
+        console.print("[red]✗ 请至少提供一个优化策略。[/red]")
+        raise typer.Exit(code=1)
+    if unsupported_strategies:
+        console.print(
+            "[red]✗ 存在不支持的优化策略: "
+            f"{', '.join(unsupported_strategies)}[/red]"
+        )
+        raise typer.Exit(code=1)
+    analyzer = DiagnosticsAnalyzer()
+
+    run, sample_results, project_config = _load_run_and_samples_or_exit(run_id)
+    report = analyzer.analyze_run(run, sample_results, top_k=5)
+    try:
+        _task_path, candidate_path, task_spec, parent_candidate = _load_task_candidate_context_from_run(
+            run,
+            project_config,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]✗ 无法恢复优化上下文:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    try:
+        teacher_adapter = build_teacher_model_adapter(
+            project_config,
+            teacher_model=teacher,
+        )
+    except ValueError as exc:
+        console.print(f"[red]✗ 无法解析 Teacher 模型:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    eval_payload = _build_optimize_eval_payload(report)
+    per_strategy_target = max(1, (num_candidates + len(strategy_list) - 1) // len(strategy_list))
+    generated_candidates: list[tuple[OptimizerStrategy, Candidate]] = []
+    seen_prompts: set[str] = set()
+
+    for strategy in strategy_list:
+        optimizer = _instantiate_optimizer(strategy)
+        generated_prompts = optimizer.optimize(
+            current_prompt=parent_candidate.prompt,
+            eval_results=eval_payload,
+            task_description=task_spec.description,
+            **_build_generation_kwargs(
+                strategy=strategy,
+                teacher_adapter=teacher_adapter,
+                num_candidates=per_strategy_target,
+                sample_results=sample_results,
+                task_spec=task_spec,
+            ),
+        )
+        for prompt_text in generated_prompts:
+            normalized_prompt = prompt_text.strip()
+            if not normalized_prompt or normalized_prompt in seen_prompts:
+                continue
+            seen_prompts.add(normalized_prompt)
+            index = len([item for item in generated_candidates if item[0] == strategy]) + 1
+            candidate_id = f"{parent_candidate.id}_{strategy}_{index:02d}"
+            generated_candidate = Candidate(
+                id=candidate_id,
+                name=f"{parent_candidate.name}_{strategy}_{index:02d}",
+                description=f"{strategy} candidate generated from run {run_id}",
+                prompt=normalized_prompt,
+                metadata=CandidateMetadata(
+                    strategy=strategy,
+                    parent_id=parent_candidate.id,
+                    teacher_model=teacher_adapter.model_name if strategy == "rewrite" else None,
+                    generation_params={
+                        "source_run_id": run_id,
+                        "strategy": strategy,
+                        "num_candidates": num_candidates,
+                    },
+                ),
+            )
+            generated_candidates.append((strategy, generated_candidate))
+            if len(generated_candidates) >= num_candidates:
+                break
+        if len(generated_candidates) >= num_candidates:
+            break
+
+    if not generated_candidates:
+        console.print("[red]✗ 未生成任何候选 prompt。[/red]")
+        raise typer.Exit(code=1)
+
+    output_table = Table(title=f"优化结果 · {run_id}")
+    output_table.add_column("Candidate ID", style="cyan")
+    output_table.add_column("Strategy", style="magenta")
+    output_table.add_column("Name", style="green")
+    output_table.add_column("File", style="yellow")
+
+    generated_files: list[Path] = []
+    for strategy, generated_candidate in generated_candidates:
+        output_path = _build_candidate_file_path(candidate_path.parent, generated_candidate.id)
+        _write_candidate_yaml(generated_candidate, output_path)
+        generated_files.append(output_path)
+        output_table.add_row(generated_candidate.id, strategy, generated_candidate.name, str(output_path))
+
     console.print("[blue]优化配置:[/blue]")
     console.print(f"  Run: {run_id}")
-    console.print(f"  Teacher: {teacher}")
-    console.print(f"  Strategies: {strategies}")
-    console.print(f"  Num Candidates: {num_candidates}")
-    
-    # Placeholder - actual optimization logic goes here
-    console.print("[yellow]优化功能开发中...[/yellow]")
+    console.print(f"  Teacher: {teacher_adapter.model_name}")
+    console.print(f"  Strategies: {', '.join(strategy_list)}")
+    console.print(f"  Num Candidates: {len(generated_files)}")
+    console.print(output_table)
 
 
 @app.command()
@@ -466,13 +777,54 @@ def search(
     split: str = typer.Option("dev", "--split", "-s", help="数据集划分"),
 ) -> None:
     """批量评估候选."""
+    split_value = _parse_split(split)
+    candidate_files = _collect_candidate_files(candidates_dir)
+    if not candidate_files:
+        console.print(f"[red]✗ 未在目录中找到候选 YAML:[/red] {candidates_dir}")
+        raise typer.Exit(code=1)
+
+    project_config = _resolve_project_config_or_exit([candidates_dir, task, dataset])
+    task_spec = Task.from_yaml(task)
+    dataset_loader = DatasetLoader(path=str(dataset), split_field=task_spec.dataset.split_field)
+    engine = EvaluationEngine(
+        adapter=build_model_adapter(project_config),
+        evaluators=build_evaluators(task_spec.evaluation_metrics),
+        db=get_db(project_config.db_path),
+        timeout=project_config.timeout,
+    )
+
+    result_table = Table(title=f"批量评估 · {candidates_dir}")
+    result_table.add_column("Run ID", style="cyan")
+    result_table.add_column("Candidate", style="green")
+    result_table.add_column("Accuracy", justify="right")
+    result_table.add_column("Metrics", style="yellow")
+
+    for candidate_file in candidate_files:
+        candidate_spec = Candidate.from_yaml(candidate_file)
+        result = engine.run(
+            task=task_spec,
+            candidate=candidate_spec,
+            dataset=dataset_loader,
+            split=split_value,
+            task_path=task,
+            candidate_path=candidate_file,
+            dataset_path=dataset,
+        )
+        metrics_display = ", ".join(
+            f"{name}={value:.3f}" for name, value in sorted(result.aggregate_metrics.items())
+        )
+        result_table.add_row(
+            result.run_id,
+            candidate_spec.id,
+            f"{result.accuracy:.2%}",
+            metrics_display or "-",
+        )
+
     console.print("[blue]批量评估:[/blue]")
     console.print(f"  Candidates: {candidates_dir}")
     console.print(f"  Task: {task}")
     console.print(f"  Dataset: {dataset}")
-    
-    # Placeholder - actual search logic goes here
-    console.print("[yellow]搜索功能开发中...[/yellow]")
+    console.print(result_table)
 
 
 @app.command()
@@ -482,12 +834,53 @@ def select(
     secondary: str | None = typer.Option(None, "--secondary", help="次要指标(逗号分隔)"),
 ) -> None:
     """选择最优候选."""
+    project_config = discover_project_config([Path.cwd()])
+    db = get_db(project_config.db_path if project_config else None)
+    secondary_metrics = _parse_secondary_metrics(secondary)
+
+    with db.session() as session:
+        seed_run = session.get(RunModel, run_id)
+        if seed_run is None:
+            console.print(f"[red]✗ 未找到 Run:[/red] {run_id}")
+            raise typer.Exit(code=1)
+
+        all_runs = session.query(RunModel).order_by(RunModel.created_at.desc()).all()
+        compatible_runs = _select_compatible_runs(seed_run, all_runs)
+        if not compatible_runs:
+            console.print("[red]✗ 未找到可比较的已完成 runs。[/red]")
+            raise typer.Exit(code=1)
+
+        selected_run = max(
+            compatible_runs,
+            key=lambda run: tuple(
+                [_metric_value_for_run(run, primary)]
+                + [_metric_value_for_run(run, metric_name) for metric_name in secondary_metrics]
+            ),
+        )
+        selected_run_id = selected_run.id
+        selected_candidate_id = selected_run.candidate_id
+
+        table = Table(title=f"候选选择 · {seed_run.task_id}")
+        table.add_column("Run ID", style="cyan")
+        table.add_column("Candidate", style="green")
+        table.add_column(primary, justify="right")
+        if secondary_metrics:
+            for metric_name in secondary_metrics:
+                table.add_column(metric_name, justify="right")
+
+        for run in compatible_runs:
+            row = [run.id, run.candidate_id, f"{_metric_value_for_run(run, primary):.4f}"]
+            for metric_name in secondary_metrics:
+                row.append(f"{_metric_value_for_run(run, metric_name):.4f}")
+            table.add_row(*row)
+
     console.print("[blue]选择最优候选:[/blue]")
-    console.print(f"  Run: {run_id}")
+    console.print(f"  Seed Run: {run_id}")
     console.print(f"  Primary: {primary}")
-    
-    # Placeholder - actual selection logic goes here
-    console.print("[yellow]选择功能开发中...[/yellow]")
+    if secondary_metrics:
+        console.print(f"  Secondary: {', '.join(secondary_metrics)}")
+    console.print(f"[green]✓[/green] 选中候选: {selected_candidate_id} ({selected_run_id})")
+    console.print(table)
 
 
 @app.command()

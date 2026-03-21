@@ -36,7 +36,7 @@ class Database:
             f"sqlite:///{self.db_path}",
             echo=os.getenv("DEBUG", "0") == "1",
         )
-        self.session_factory = sessionmaker(bind=self.engine)
+        self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
     
     def create_tables(self) -> None:
         """Create all tables."""

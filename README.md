@@ -207,7 +207,7 @@ promptopt diagnose runs/run_001
 ```bash
 promptopt optimize runs/run_001 \
   --teacher openai/gpt-5 \
-  --strategies rewrite,fewshot,contract \
+  --strategies rewrite \
   --num-candidates 12
 ```
 
@@ -281,7 +281,7 @@ promptopt/
 
 ## Roadmap
 
-> 当前进度：`v0.2` 主链已打通（diagnose / 导出失败样本 / baseline diff），下一步聚焦 `v0.3 prompt search`。
+> 当前进度：`v0.3` 主链已打通（optimize / search / select / lineage），下一步聚焦回归门禁与上线控制。
 
 ### v0.1
 
@@ -296,12 +296,14 @@ promptopt/
 
 ### v0.3
 
-* prompt 搜索（rewrite / few-shot / contract） 🔨
-* selection
+* prompt 搜索（rewrite / few-shot / contract） ✅
+* selection ✅
+
+> 当前阶段说明：`optimize`、`search`、`select` 与基础 lineage 已落地，下一步重点是 held-out test gate、回归检测和约束检查。
 
 ### v0.4
 
-* Pareto 优化
+* Pareto 优化 🔨
 * cost-aware 搜索
 
 ---

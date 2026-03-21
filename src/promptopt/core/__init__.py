@@ -7,6 +7,7 @@ from promptopt.core.evaluation import (
     ProjectConfig,
     build_evaluators,
     build_model_adapter,
+    build_teacher_model_adapter,
     discover_project_config,
     render_prompt,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "EvaluationEngine",
     "build_evaluators",
     "build_model_adapter",
+    "build_teacher_model_adapter",
     "discover_project_config",
     "render_prompt",
     "Lineage",

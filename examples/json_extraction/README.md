@@ -40,7 +40,7 @@ promptopt diagnose runs/run_001
 ```bash
 promptopt optimize runs/run_001 \
   --teacher openai/gpt-4 \
-  --strategies rewrite,fewshot,contract \
+  --strategies rewrite \
   --num-candidates 12
 ```
 
