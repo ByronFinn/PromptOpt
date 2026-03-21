@@ -206,7 +206,7 @@ promptopt diagnose runs/run_001
 
 ```bash
 promptopt optimize runs/run_001 \
-  --teacher openai:gpt-5 \
+  --teacher openai/gpt-5 \
   --strategies rewrite,fewshot,contract \
   --num-candidates 12
 ```
@@ -281,15 +281,17 @@ promptopt/
 
 ## Roadmap
 
+> 当前进度：`v0.1` 主链已打通（spec / eval runner / artifact 持久化），下一步聚焦 `v0.2 diagnostics`。
+
 ### v0.1
 
-* task / dataset / candidate 规范
-* eval runner
-* artifact 保存
+* task / dataset / candidate 规范 ✅
+* eval runner ✅
+* artifact 保存 ✅
 
 ### v0.2
 
-* diagnostics（失败分析）
+* diagnostics（失败分析） 🔨
 * 报告生成
 
 ### v0.3

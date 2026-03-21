@@ -52,7 +52,7 @@ class Task(BaseModel):
     
     def format_prompt(self, input_text: str) -> str:
         """Format the prompt template with input text."""
-        return self.prompt_template.format(input=input_text)
+        return self.prompt_template.replace("{input}", input_text)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> Task:

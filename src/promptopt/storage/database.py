@@ -23,12 +23,17 @@ class Database:
         if db_path is None:
             home_dir = Path.home()
             promptopt_dir = home_dir / ".promptopt"
-            promptopt_dir.mkdir(exist_ok=True)
+            promptopt_dir.mkdir(parents=True, exist_ok=True)
             db_path = str(promptopt_dir / "promptopt.db")
+
+        db_file = Path(db_path).expanduser()
+        if not db_file.is_absolute():
+            db_file = db_file.resolve()
+        db_file.parent.mkdir(parents=True, exist_ok=True)
         
-        self.db_path = db_path
+        self.db_path = str(db_file)
         self.engine = create_engine(
-            f"sqlite:///{db_path}",
+            f"sqlite:///{self.db_path}",
             echo=os.getenv("DEBUG", "0") == "1",
         )
         self.session_factory = sessionmaker(bind=self.engine)
@@ -38,7 +43,7 @@ class Database:
         Base.metadata.create_all(self.engine)
     
     @contextmanager
-    def session(self) -> Generator[Session, None, None]:
+    def session(self) -> Generator[Session]:
         """Get a database session.
         
         Yields:
@@ -63,11 +68,17 @@ class Database:
 _db: Database | None = None
 
 
-def get_db() -> Database:
+def get_db(db_path: str | None = None) -> Database:
     """Get or create global database instance."""
     global _db
+    normalized_path = None if db_path is None else str(Path(db_path).expanduser())
+
     if _db is None:
-        _db = Database()
+        _db = Database(normalized_path)
+        _db.create_tables()
+    elif normalized_path is not None and Path(_db.db_path) != Path(normalized_path):
+        _db.close()
+        _db = Database(normalized_path)
         _db.create_tables()
     return _db
 

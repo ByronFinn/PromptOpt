@@ -39,7 +39,7 @@ promptopt diagnose runs/run_001
 4. 生成优化候选：
 ```bash
 promptopt optimize runs/run_001 \
-  --teacher openai:gpt-4 \
+  --teacher openai/gpt-4 \
   --strategies rewrite,fewshot,contract \
   --num-candidates 12
 ```

@@ -3,16 +3,15 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from promptopt.core import (
-    Task,
-    Dataset,
     Candidate,
     CandidateMetadata,
+    Dataset,
+    EvalResult,
     Run,
     RunResult,
-    EvalResult,
+    Task,
 )
 
 

@@ -6,7 +6,17 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from promptopt.storage import get_db
+from promptopt.core import (
+    Candidate,
+    DatasetLoader,
+    EvaluationEngine,
+    Split,
+    Task,
+    build_evaluators,
+    build_model_adapter,
+    discover_project_config,
+)
+from promptopt.storage import RunModel, get_db
 
 app = typer.Typer(
     name="promptopt",
@@ -15,6 +25,94 @@ app = typer.Typer(
 )
 
 console = Console()
+
+
+def _parse_split(raw_value: str) -> Split:
+    normalized = raw_value.lower().strip()
+    try:
+        return Split(normalized)
+    except ValueError as exc:
+        allowed = ", ".join(split.value for split in Split)
+        raise typer.BadParameter(f"split 必须是以下值之一: {allowed}") from exc
+
+
+def _write_template(path: Path, content: str) -> None:
+    if path.exists():
+        return
+    path.write_text(content, encoding="utf-8")
+
+PROMPTOPT_CONFIG_TEMPLATE = """# PromptOpt Local Configuration
+
+models:
+    teacher: openai/gpt-4
+    target: openai/gpt-3.5-turbo
+
+evaluation:
+    batch_size: 10
+    max_workers: 5
+    timeout: 60
+
+storage:
+    db_path: .promptopt/promptopt.db
+"""
+
+TASK_TEMPLATE = """name: text_extraction
+description: 从输入文本中抽取结构化信息
+dataset:
+    name: sample_dataset
+    path: datasets/dataset.yaml
+    split_field: split
+prompt_template: |
+    从以下文本中抽取结构化信息，并以 JSON 输出：
+
+    {input}
+output_schema: |
+    {"type": "object"}
+evaluation_metrics:
+    - exact_match
+    - json_validator
+"""
+
+CANDIDATE_TEMPLATE = """id: baseline_001
+name: baseline
+description: 初始 baseline prompt
+
+prompt: |
+    从以下文本中抽取结构化信息，并以 JSON 输出：
+
+    {input}
+
+    输出格式：
+    {
+        "field": "value"
+    }
+
+metadata:
+    strategy: baseline
+"""
+
+DATASET_CONFIG_TEMPLATE = """name: sample_dataset
+path: datasets/samples.json
+split_field: split
+"""
+
+SAMPLE_DATASET_TEMPLATE = """{
+    "samples": [
+        {
+            "id": "sample_001",
+            "input": "患者女性，38岁，咽痛伴低热3天。",
+            "expected": {"field": "上呼吸道感染"},
+            "split": "dev"
+        },
+        {
+            "id": "sample_002",
+            "input": "患者男性，60岁，反复胸闷2周。",
+            "expected": {"field": "胸闷"},
+            "split": "test"
+        }
+    ]
+}
+"""
 
 
 @app.command()
@@ -31,7 +129,14 @@ def init(
     (output_path / "candidates").mkdir(exist_ok=True)
     (output_path / "datasets").mkdir(exist_ok=True)
     (output_path / "runs").mkdir(exist_ok=True)
-    
+    (output_path / ".promptopt").mkdir(exist_ok=True)
+
+    _write_template(output_path / ".promptopt.yaml", PROMPTOPT_CONFIG_TEMPLATE)
+    _write_template(output_path / "tasks" / "task.yaml", TASK_TEMPLATE)
+    _write_template(output_path / "candidates" / "baseline.yaml", CANDIDATE_TEMPLATE)
+    _write_template(output_path / "datasets" / "dataset.yaml", DATASET_CONFIG_TEMPLATE)
+    _write_template(output_path / "datasets" / "samples.json", SAMPLE_DATASET_TEMPLATE)
+
     console.print(f"[green]✓[/green] 项目已初始化: {output_path}")
 
 
@@ -43,14 +148,65 @@ def eval(
     split: str = typer.Option("dev", "--split", "-s", help="数据集划分"),
 ) -> None:
     """运行评估."""
-    console.print("[blue]评估配置:[/blue]")
-    console.print(f"  Task: {task}")
-    console.print(f"  Candidate: {candidate}")
-    console.print(f"  Dataset: {dataset}")
-    console.print(f"  Split: {split}")
-    
-    # Placeholder - actual evaluation logic goes here
-    console.print("[yellow]评估功能开发中...[/yellow]")
+    split_value = _parse_split(split)
+
+    try:
+        task_spec = Task.from_yaml(task)
+        candidate_spec = Candidate.from_yaml(candidate)
+        dataset_loader = DatasetLoader(
+            path=str(dataset),
+            split_field=task_spec.dataset.split_field,
+        )
+        project_config = discover_project_config([task, candidate, dataset])
+        if project_config is None:
+            raise ValueError(
+                "未找到 .promptopt.yaml，请在项目根目录提供运行配置。"
+            )
+
+        engine = EvaluationEngine(
+            adapter=build_model_adapter(project_config),
+            evaluators=build_evaluators(task_spec.evaluation_metrics),
+            db=get_db(project_config.db_path),
+            timeout=project_config.timeout,
+        )
+        result = engine.run(
+            task=task_spec,
+            candidate=candidate_spec,
+            dataset=dataset_loader,
+            split=split_value,
+            task_path=task,
+            candidate_path=candidate,
+            dataset_path=dataset,
+        )
+    except Exception as exc:
+        console.print(f"[red]✗ 评估失败:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    summary_table = Table(title=f"评估结果 · {result.run_id}")
+    summary_table.add_column("字段", style="cyan")
+    summary_table.add_column("值", style="green")
+    summary_table.add_row("Task", task_spec.name)
+    summary_table.add_row("Candidate", candidate_spec.name)
+    summary_table.add_row("Model", engine.model_name)
+    summary_table.add_row("Split", split_value.value)
+    summary_table.add_row("Samples", str(result.total_samples))
+    summary_table.add_row("Accuracy", f"{result.accuracy:.2%}")
+    summary_table.add_row("Latency", f"{result.latency_ms:.2f} ms/sample")
+    console.print(summary_table)
+
+    if result.aggregate_metrics:
+        metrics_table = Table(title="聚合指标")
+        metrics_table.add_column("指标", style="magenta")
+        metrics_table.add_column("值", style="yellow", justify="right")
+        for metric_name, metric_value in sorted(result.aggregate_metrics.items()):
+            metrics_table.add_row(metric_name, f"{metric_value:.4f}")
+        console.print(metrics_table)
+
+    error_count = sum(1 for sample in result.sample_results if sample.error)
+    if error_count:
+        console.print(f"[yellow]⚠[/yellow] 有 {error_count} 个样本在评估时出错。")
+
+    console.print(f"[green]✓[/green] Run 已保存: {result.run_id}")
 
 
 @app.command()
@@ -67,7 +223,7 @@ def diagnose(
 @app.command()
 def optimize(
     run_id: str = typer.Argument(..., help="Run ID"),
-    teacher: str = typer.Option("openai:gpt-4", "--teacher", help="Teacher 模型"),
+    teacher: str = typer.Option("openai/gpt-4", "--teacher", help="Teacher 模型"),
     strategies: str = typer.Option("rewrite,fewshot", "--strategies", help="优化策略"),
     num_candidates: int = typer.Option(12, "--num-candidates", help="生成候选数量"),
 ) -> None:
@@ -131,17 +287,18 @@ def verify(
 @app.command()
 def list_runs() -> None:
     """列出所有 runs."""
-    db = get_db()
+    project_config = discover_project_config([Path.cwd()])
+    db = get_db(project_config.db_path if project_config else None)
     
     table = Table(title="Runs")
     table.add_column("ID", style="cyan")
     table.add_column("Task", style="magenta")
     table.add_column("Candidate", style="green")
+    table.add_column("Model", style="blue")
     table.add_column("Status", style="yellow")
     table.add_column("Accuracy", justify="right")
     
     with db.session() as session:
-        from promptopt.storage.models import RunModel
         runs = session.query(RunModel).order_by(RunModel.created_at.desc()).limit(20).all()
         
         for run in runs:
@@ -149,6 +306,7 @@ def list_runs() -> None:
                 run.id,
                 run.task_id,
                 run.candidate_id,
+                run.model_name or "-",
                 run.status,
                 f"{run.accuracy:.2%}" if run.accuracy else "-",
             )

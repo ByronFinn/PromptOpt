@@ -17,9 +17,9 @@
 | 模型适配器 | ✅ 完成 | LiteLLM adapter |
 | 优化器基类 | ⚠️ 部分 | Rewrite placeholder |
 | 诊断分析器 | ⚠️ 部分 | Stub 实现 |
-| **评估引擎** | ❌ 未完成 | `eval` 命令为空 |
-| **数据加载** | ❌ 未完成 | Dataset loader 未实现 |
-| **LLM 集成** | ⚠️ 部分 | Adapter 有但未真正调用 |
+| **评估引擎** | ✅ 完成 | `EvaluationEngine`、CLI `eval` 与 run/sample 持久化已接通 |
+| **数据加载** | ✅ 完成 | `DatasetLoader` 支持 JSON/YAML/CSV 与 dataset config 跳转 |
+| **LLM 集成** | ⚠️ 部分 | target adapter 已接入 `eval`，`optimize/search` 等链路尚未接通 |
 | **CI/CD** | ❌ 未完成 | - |
 
 ---
@@ -37,6 +37,8 @@
 
 ## M1: 评估底座可用 🔨 进行中
 
+> 当前状态：P0/P1/P2 issue 主线已落地，剩余工作集中在 sample-level 导出与更强的可复现保障。
+
 ### 目标
 
 先把"测得准、存得全"做出来。
@@ -47,34 +49,34 @@
 
 | # | Issue | 描述 | 验收标准 |
 |---|-------|------|----------|
-| 1 | **[实现数据集加载器](https://github.com/yourusername/promptopt/issues/1)** | 实现 `DatasetLoader` 支持 JSON/YAML/CSV 格式 | 能加载 `examples/json_extraction/datasets/dataset.yaml` 并返回样本列表 |
-| 2 | **[实现 TaskSpec 规范解析器](https://github.com/yourusername/promptopt/issues/2)** | 解析 `task.yaml` 为 `Task` 对象 | `Task.from_yaml()` 正常工作 |
-| 3 | **[实现 Candidate 规范解析器](https://github.com/yourusername/promptopt/issues/3)** | 解析 `candidate.yaml` 为 `Candidate` 对象 | `Candidate.from_yaml()` 正常工作 |
-| 4 | **[实现评估引擎核心](https://github.com/yourusername/promptopt/issues/4)** | 实现 `EvaluationEngine.run(task, candidate, dataset)` | 能对数据集运行评估并返回 `RunResult` |
-| 5 | **[实现 promptopt eval 命令](https://github.com/yourusername/promptopt/issues/5)** | 将评估引擎接入 CLI | `promptopt eval --task x --candidate x --dataset x` 能运行并输出结果 |
+| 1 | **[实现数据集加载器](https://github.com/yourusername/promptopt/issues/1)** | 实现 `DatasetLoader` 支持 JSON/YAML/CSV 格式 | ✅ 已完成 |
+| 2 | **[实现 TaskSpec 规范解析器](https://github.com/yourusername/promptopt/issues/2)** | 解析 `task.yaml` 为 `Task` 对象 | ✅ 已完成 |
+| 3 | **[实现 Candidate 规范解析器](https://github.com/yourusername/promptopt/issues/3)** | 解析 `candidate.yaml` 为 `Candidate` 对象 | ✅ 已完成 |
+| 4 | **[实现评估引擎核心](https://github.com/yourusername/promptopt/issues/4)** | 实现 `EvaluationEngine.run(task, candidate, dataset)` | ✅ 已完成 |
+| 5 | **[实现 promptopt eval 命令](https://github.com/yourusername/promptopt/issues/5)** | 将评估引擎接入 CLI | ✅ 已完成 |
 
 #### P1 - 存储完整性
 
 | # | Issue | 描述 | 验收标准 |
 |---|-------|------|----------|
-| 6 | **[实现 Run 结果持久化](https://github.com/yourusername/promptopt/issues/6)** | 将 `RunResult` 存入 SQLite | 二次运行结果可查询 |
-| 7 | **[实现 sample-level 结果存储](https://github.com/yourusername/promptopt/issues/7)** | 存储每个样本的评估详情 | 可追溯单个样本的输入/输出/评分 |
+| 6 | **[实现 Run 结果持久化](https://github.com/yourusername/promptopt/issues/6)** | 将 `RunResult` 存入 SQLite | ✅ 已完成 |
+| 7 | **[实现 sample-level 结果存储](https://github.com/yourusername/promptopt/issues/7)** | 存储每个样本的评估详情 | ✅ 已完成 |
 
 #### P2 - 基础体验
 
 | # | Issue | 描述 | 验收标准 |
 |---|-------|------|----------|
-| 8 | **[修复 mypy 错误](https://github.com/yourusername/promptopt/issues/8)** | `generate_stream` 返回类型不兼容 | `uv run mypy src/` 通过 |
-| 9 | **[修复 ruff lint](https://github.com/yourusername/promptopt/issues/9)** | Import 排序和类型导入问题 | `uv run ruff check src/` 通过 |
-| 10 | **[实现 `promptopt init` 完整逻辑](https://github.com/yourusername/promptopt/issues/10)** | 生成完整项目模板而非空目录 | `promptopt init myproject` 生成可用模板 |
+| 8 | **[修复 mypy 错误](https://github.com/yourusername/promptopt/issues/8)** | `generate_stream` 返回类型不兼容 | ✅ 已完成 |
+| 9 | **[修复 ruff lint](https://github.com/yourusername/promptopt/issues/9)** | Import 排序和类型导入问题 | ✅ 已完成 |
+| 10 | **[实现 `promptopt init` 完整逻辑](https://github.com/yourusername/promptopt/issues/10)** | 生成完整项目模板而非空目录 | ✅ 已完成 |
 
 ### M1 验收标准
 
-- [ ] `promptopt eval` 能对真实任务运行评估
+- [x] `promptopt eval` 能对真实任务运行评估
 - [ ] 评估结果可复现（二次运行一致或可解释差异）
-- [ ] `promptopt list-runs` 能查询历史运行记录
+- [x] `promptopt list-runs` 能查询历史运行记录
 - [ ] Sample-level 结果可导出
-- [ ] 类型检查和 lint 全部通过
+- [x] 类型检查和 lint 全部通过
 
 ### M1 成果标志
 

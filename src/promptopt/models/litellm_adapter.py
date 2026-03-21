@@ -57,7 +57,7 @@ class LiteLLMAdapter(ModelAdapter):
         
         return response.choices[0].message.content or ""
     
-    async def generate_stream(
+    def generate_stream(
         self,
         prompt: str,
         *,
@@ -66,22 +66,25 @@ class LiteLLMAdapter(ModelAdapter):
         **kwargs: Any,
     ) -> AsyncIterator[str]:
         """Generate a streaming response using LiteLLM."""
-        merged_kwargs = {**self.default_kwargs, **kwargs}
-        
-        response = await litellm.acompletion(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            api_key=self.api_key,
-            api_base=self.base_url,
-            stream=True,
-            **merged_kwargs,
-        )
-        
-        async for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+        async def iterator() -> AsyncIterator[str]:
+            merged_kwargs = {**self.default_kwargs, **kwargs}
+
+            response = await litellm.acompletion(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                api_key=self.api_key,
+                api_base=self.base_url,
+                stream=True,
+                **merged_kwargs,
+            )
+
+            async for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+
+        return iterator()
     
     def get_token_count(self, text: str) -> int:
         """Get token count using LiteLLM's token counter."""

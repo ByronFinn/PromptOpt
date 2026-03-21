@@ -1,1 +1,24 @@
-# PromptOpt Optimizers Module
+name: medical_json_extraction
+description: 从医疗文本中抽取疾病、症状、检查和治疗信息
+dataset:
+  name: medical_ner
+  path: datasets/dataset.yaml
+  split_field: split
+prompt_template: |
+  从以下医疗文本中抽取信息，并以 JSON 格式输出：
+
+  {input}
+output_schema: |
+  {
+    "type": "object",
+    "properties": {
+      "疾病": {"type": "string"},
+      "症状": {"type": "array"},
+      "检查": {"type": "array"},
+      "治疗": {"type": "array"}
+    }
+  }
+evaluation_metrics:
+  - exact_match
+  - f1
+  - json_validator

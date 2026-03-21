@@ -1,7 +1,5 @@
 """Tests for evaluators."""
 
-import pytest
-
 from promptopt.evaluators import (
     ExactMatchEvaluator,
     F1Evaluator,
