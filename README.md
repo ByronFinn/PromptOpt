@@ -281,7 +281,7 @@ promptopt/
 
 ## Roadmap
 
-> 当前进度：工程主链已打通到 Prompt CI（quiet/json/report/git-diff/CI exit code），下一步聚焦插件化与生态扩展。
+> 当前进度：工程主链已打通到插件化与模板生态（plugin registry / templates / docs），下一步聚焦团队协作与可视化。
 
 ### v0.1
 

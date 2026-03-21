@@ -1,0 +1,22 @@
+{
+  "samples": [
+    {
+      "id": "intent_001",
+      "input": "你好，今天过得怎么样？",
+      "expected": "greet",
+      "split": "dev"
+    },
+    {
+      "id": "intent_002",
+      "input": "我想查询订单 12345 的物流状态。",
+      "expected": "order_status",
+      "split": "dev"
+    },
+    {
+      "id": "intent_003",
+      "input": "这笔订单我想申请退款。",
+      "expected": "refund",
+      "split": "test"
+    }
+  ]
+}

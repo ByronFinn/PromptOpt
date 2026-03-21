@@ -1,0 +1,8 @@
+id: baseline_001
+name: baseline
+prompt: |
+  请回答下面的问题，只输出最终答案：
+
+  {input}
+metadata:
+  strategy: baseline

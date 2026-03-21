@@ -2,10 +2,10 @@
 
 import difflib
 import json
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
 
 import typer
 import yaml
@@ -32,6 +32,7 @@ from promptopt.diagnostics import (
     DiagnosticsReport,
 )
 from promptopt.optimizers import ContractOptimizer, FewShotOptimizer, RewriteOptimizer
+from promptopt.plugins import get_optimizer_registry
 from promptopt.storage import RunModel, SampleResultModel, get_db
 from promptopt.storage.models import CandidateModel, LineageModel
 
@@ -42,8 +43,6 @@ app = typer.Typer(
 )
 
 console = Console()
-
-type OptimizerStrategy = Literal["rewrite", "fewshot", "contract"]
 
 
 def _parse_split(raw_value: str) -> Split:
@@ -59,6 +58,28 @@ def _write_template(path: Path, content: str) -> None:
     if path.exists():
         return
     path.write_text(content, encoding="utf-8")
+
+
+def _builtin_templates_root() -> Path:
+    return Path(__file__).resolve().parents[3] / "examples"
+
+
+def _resolve_template_dir(template_name: str) -> Path:
+    template_dir = _builtin_templates_root() / template_name
+    if not template_dir.exists() or not template_dir.is_dir():
+        raise ValueError(f"未知模板: {template_name}")
+    return template_dir
+
+
+def _copy_template_tree(source_dir: Path, destination_dir: Path) -> None:
+    for source_path in source_dir.rglob("*"):
+        relative_path = source_path.relative_to(source_dir)
+        destination_path = destination_dir / relative_path
+        if source_path.is_dir():
+            destination_path.mkdir(parents=True, exist_ok=True)
+            continue
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, destination_path)
 
 
 def _truncate_text(text: str, *, limit: int) -> str:
@@ -278,18 +299,6 @@ def _normalize_strategies(raw_strategies: str) -> list[str]:
     return [item.strip() for item in raw_strategies.split(",") if item.strip()]
 
 
-def _coerce_optimizer_strategies(raw_strategies: list[str]) -> list[OptimizerStrategy]:
-    strategies: list[OptimizerStrategy] = []
-    for item in raw_strategies:
-        if item == "rewrite":
-            strategies.append("rewrite")
-        elif item == "fewshot":
-            strategies.append("fewshot")
-        elif item == "contract":
-            strategies.append("contract")
-    return strategies
-
-
 def _build_optimize_eval_payload(report: DiagnosticsReport) -> dict[str, object]:
     return {
         "run_id": report.run_id,
@@ -461,20 +470,21 @@ def _load_task_candidate_context_from_run(
 
 
 def _instantiate_optimizer(
-    strategy: OptimizerStrategy,
+    strategy: str,
 ) -> RewriteOptimizer | FewShotOptimizer | ContractOptimizer:
-    if strategy == "rewrite":
-        return RewriteOptimizer()
-    if strategy == "fewshot":
-        return FewShotOptimizer()
-    if strategy == "contract":
-        return ContractOptimizer()
-    raise ValueError(f"不支持的优化策略: {strategy}")
+    optimizer_registry = get_optimizer_registry()
+    optimizer_cls = optimizer_registry.get(strategy)
+    if optimizer_cls is None:
+        raise ValueError(f"不支持的优化策略: {strategy}")
+    optimizer = optimizer_cls()
+    if not isinstance(optimizer, (RewriteOptimizer, FewShotOptimizer, ContractOptimizer)):
+        return optimizer  # type: ignore[return-value]
+    return optimizer
 
 
 def _build_generation_kwargs(
     *,
-    strategy: OptimizerStrategy,
+    strategy: str,
     teacher_adapter: object,
     num_candidates: int,
     sample_results: list[SampleResultModel],
@@ -703,10 +713,21 @@ SAMPLE_DATASET_TEMPLATE = """{
 def init(
     name: str = typer.Argument(..., help="项目名称"),
     output_dir: Path | None = typer.Option(None, "--output", "-o", help="输出目录"),
+    template: str = typer.Option("default", "--template", help="项目模板：default/json_extraction/classification/qa"),
 ) -> None:
     """初始化一个新的 PromptOpt 项目."""
     output_path = output_dir or Path.cwd() / name
     output_path.mkdir(parents=True, exist_ok=True)
+
+    if template != "default":
+        try:
+            template_dir = _resolve_template_dir(template)
+        except ValueError as exc:
+            console.print(f"[red]✗ {exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        _copy_template_tree(template_dir, output_path)
+        console.print(f"[green]✓[/green] 项目已通过模板初始化: {output_path}")
+        return
     
     # Create directory structure
     (output_path / "tasks").mkdir(exist_ok=True)
@@ -911,9 +932,10 @@ def optimize(
 ) -> None:
     """生成候选 Prompt 优化."""
     raw_strategy_list = _normalize_strategies(strategies)
-    strategy_list = _coerce_optimizer_strategies(raw_strategy_list)
+    optimizer_registry = get_optimizer_registry()
+    strategy_list = raw_strategy_list
     unsupported_strategies = [
-        item for item in raw_strategy_list if item not in {"rewrite", "fewshot", "contract"}
+        item for item in raw_strategy_list if item not in optimizer_registry
     ]
     if not strategy_list:
         console.print("[red]✗ 请至少提供一个优化策略。[/red]")
@@ -947,7 +969,7 @@ def optimize(
 
     eval_payload = _build_optimize_eval_payload(report)
     per_strategy_target = max(1, (num_candidates + len(strategy_list) - 1) // len(strategy_list))
-    generated_candidates: list[tuple[OptimizerStrategy, Candidate]] = []
+    generated_candidates: list[tuple[str, Candidate]] = []
     seen_prompts: set[str] = set()
 
     for strategy in strategy_list:

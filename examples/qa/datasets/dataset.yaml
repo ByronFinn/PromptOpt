@@ -1,0 +1,3 @@
+name: qa_demo
+path: datasets/qa.json
+split_field: split

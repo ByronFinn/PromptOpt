@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Protocol
 
 
 class ModelAdapter(ABC):
@@ -76,3 +76,28 @@ class ModelAdapter(ABC):
     def supports_streaming(self) -> bool:
         """Whether this adapter supports streaming."""
         return True
+
+
+class ModelProvider(Protocol):
+    """Protocol for model provider plugins.
+
+    Providers are responsible for declaring whether they support a model name
+    and constructing the matching ``ModelAdapter``.
+    """
+
+    name: str
+
+    def supports(self, model_name: str) -> bool:
+        """Return whether this provider can build an adapter for ``model_name``."""
+        ...
+
+    def build(
+        self,
+        model_name: str,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        **kwargs: Any,
+    ) -> ModelAdapter:
+        """Build a model adapter for ``model_name``."""
+        ...

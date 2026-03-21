@@ -7,7 +7,7 @@ import difflib
 import json
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -19,13 +19,9 @@ from promptopt.core.candidate import Candidate
 from promptopt.core.dataset import DatasetLoader, Sample
 from promptopt.core.run import EvalResult, RunResult
 from promptopt.core.task import Split, Task
-from promptopt.evaluators import (
-    Evaluator,
-    ExactMatchEvaluator,
-    F1Evaluator,
-    JSONValidatorEvaluator,
-)
-from promptopt.models import LiteLLMAdapter, ModelAdapter
+from promptopt.evaluators import Evaluator
+from promptopt.models import ModelAdapter
+from promptopt.plugins import get_evaluator_registry, resolve_provider
 from promptopt.storage.database import Database, get_db
 from promptopt.storage.models import (
     CandidateModel,
@@ -469,11 +465,7 @@ class EvaluationEngine:
 
 def build_evaluators(metric_names: Sequence[str]) -> list[Evaluator]:
     """Build evaluator instances from metric names."""
-    registry: dict[str, Callable[[], Evaluator]] = {
-        "exact_match": ExactMatchEvaluator,
-        "f1": F1Evaluator,
-        "json_validity": JSONValidatorEvaluator,
-    }
+    registry = get_evaluator_registry()
     aliases = {
         "exact_match": "exact_match",
         "f1": "f1",
@@ -490,7 +482,11 @@ def build_evaluators(metric_names: Sequence[str]) -> list[Evaluator]:
             raise ValueError(f"不支持的评估指标: {metric_name}")
         if canonical_name in seen:
             continue
-        evaluators.append(registry[canonical_name]())
+        evaluator_cls = registry[canonical_name]
+        evaluator = evaluator_cls()
+        if not isinstance(evaluator, Evaluator):
+            raise ValueError(f"插件 `{canonical_name}` 未返回有效的 Evaluator 实例。")
+        evaluators.append(evaluator)
         seen.add(canonical_name)
     return evaluators
 
@@ -508,9 +504,9 @@ def build_model_adapter(
     )
     if base_url is not None:
         resolved_base_url = base_url
-
-    return LiteLLMAdapter(
-        model=resolved_model,
+    provider = resolve_provider(resolved_model)
+    return provider.build(
+        resolved_model,
         base_url=resolved_base_url,
     )
 

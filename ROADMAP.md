@@ -207,9 +207,9 @@
 
 ---
 
-## M6: 插件化与生态初步成立 🔨 进行中
+## M6: 插件化与生态初步成立 ✅ 已完成
 
-> 当前状态：M5 的脚本化与 CI 能力已补齐，下一步优先统一 evaluator/optimizer/provider 的插件入口，并扩充 example 模板与插件文档。
+> 当前状态：evaluator/optimizer/provider 插件入口、example 模板体系与插件开发文档已落地，基础生态扩展能力已具备。
 
 ### 目标
 
@@ -219,17 +219,17 @@
 
 | # | Issue | 描述 | 验收标准 |
 |---|-------|------|----------|
-| 33 | **[定义 Evaluator 插件接口](https://github.com/yourusername/promptopt/issues/33)** | 第三方可新增 evaluator | 只需实现 `Evaluator` 接口并注册 |
-| 34 | **[定义 Optimizer 插件接口](https://github.com/yourusername/promptopt/issues/34)** | 第三方可新增 optimizer | 只需实现 `Optimizer` 接口并注册 |
-| 35 | **[定义 Model Provider 插件接口](https://github.com/yourusername/promptopt/issues/35)** | 支持新的模型 provider | adapter 模式支持热插拔 |
-| 36 | **[实现 example 模板体系](https://github.com/yourusername/promptopt/issues/36)** | 提供 3+ 个完整 example | JSON extraction, classification, QA |
-| 37 | **[编写插件开发文档](https://github.com/yourusername/promptopt/issues/37)** | 教第三方开发者如何扩展 | 文档包含接口说明和示例 |
+| 33 | **[定义 Evaluator 插件接口](https://github.com/yourusername/promptopt/issues/33)** | 第三方可新增 evaluator | ✅ 已完成 |
+| 34 | **[定义 Optimizer 插件接口](https://github.com/yourusername/promptopt/issues/34)** | 第三方可新增 optimizer | ✅ 已完成 |
+| 35 | **[定义 Model Provider 插件接口](https://github.com/yourusername/promptopt/issues/35)** | 支持新的模型 provider | ✅ 已完成基础版 |
+| 36 | **[实现 example 模板体系](https://github.com/yourusername/promptopt/issues/36)** | 提供 3+ 个完整 example | ✅ 已完成 |
+| 37 | **[编写插件开发文档](https://github.com/yourusername/promptopt/issues/37)** | 教第三方开发者如何扩展 | ✅ 已完成 |
 
 ### M6 验收标准
 
-- [ ] 第三方可新增 evaluator 而不修改核心代码
-- [ ] 第三方可新增 optimizer 而不修改核心代码
-- [ ] 有 3+ 个可运行的 example
+- [x] 第三方可新增 evaluator 而不修改核心代码
+- [x] 第三方可新增 optimizer 而不修改核心代码
+- [x] 有 3+ 个可运行的 example
 
 ### M6 成果标志
 
@@ -237,7 +237,9 @@
 
 ---
 
-## M7: 团队协作与可视化平台 🛠 待开始
+## M7: 团队协作与可视化平台 🔨 进行中
+
+> 当前状态：核心 CLI、门禁、CI 与插件化都已具备，下一步聚焦最小 Web UI、run 对比、slice 可视化与 prompt registry/审批流。
 
 ### 目标
 

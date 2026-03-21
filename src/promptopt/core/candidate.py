@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -19,7 +18,7 @@ class CandidateMetadata(BaseModel):
         teacher_model: Model used for generation
         generation_params: Parameters used for generation
     """
-    strategy: Literal["rewrite", "fewshot", "contract", "baseline"]
+    strategy: str
     parent_id: str | None = None
     teacher_model: str | None = None
     generation_params: dict[str, object] = Field(default_factory=dict)

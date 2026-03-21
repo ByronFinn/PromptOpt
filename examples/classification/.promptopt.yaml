@@ -1,0 +1,13 @@
+models:
+  teacher: openai/gpt-4
+  target: openai/gpt-3.5-turbo
+
+evaluation:
+  timeout: 60
+
+storage:
+  db_path: ~/.promptopt/promptopt.db
+
+constraints:
+  max_cost: 10.0
+  max_latency: 5000

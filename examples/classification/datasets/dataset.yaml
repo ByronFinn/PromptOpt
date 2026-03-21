@@ -1,0 +1,3 @@
+name: intent_demo
+path: datasets/intent.json
+split_field: split

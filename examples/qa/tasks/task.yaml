@@ -1,0 +1,13 @@
+name: factual_qa
+description: 根据问题直接给出简短事实答案
+dataset:
+  name: qa_demo
+  path: datasets/dataset.yaml
+  split_field: split
+prompt_template: |
+  请根据问题给出简短、直接的答案，不要解释。
+
+  问题：{input}
+evaluation_metrics:
+  - exact_match
+  - f1

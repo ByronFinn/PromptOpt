@@ -1,0 +1,16 @@
+name: intent_classification
+description: 将用户输入分类为预定义意图标签
+dataset:
+  name: intent_demo
+  path: datasets/dataset.yaml
+  split_field: split
+prompt_template: |
+  请阅读用户输入，并仅输出一个标签：
+  - greet
+  - order_status
+  - refund
+
+  输入：{input}
+evaluation_metrics:
+  - exact_match
+  - f1

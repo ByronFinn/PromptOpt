@@ -1,0 +1,22 @@
+{
+  "samples": [
+    {
+      "id": "qa_001",
+      "input": "中国的首都是哪里？",
+      "expected": "北京",
+      "split": "dev"
+    },
+    {
+      "id": "qa_002",
+      "input": "一年有多少个月？",
+      "expected": "12",
+      "split": "dev"
+    },
+    {
+      "id": "qa_003",
+      "input": "地球围绕哪颗恒星公转？",
+      "expected": "太阳",
+      "split": "test"
+    }
+  ]
+}

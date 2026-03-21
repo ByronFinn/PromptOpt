@@ -1,0 +1,11 @@
+id: baseline_001
+name: baseline
+prompt: |
+  请判断用户输入属于哪个意图标签，并只输出标签本身：
+  - greet
+  - order_status
+  - refund
+
+  输入：{input}
+metadata:
+  strategy: baseline
