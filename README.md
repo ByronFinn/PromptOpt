@@ -281,7 +281,7 @@ promptopt/
 
 ## Roadmap
 
-> 当前进度：工程主链已打通到回归门禁（verify / regression / constraints / rollback / prompt diff），下一步聚焦 Prompt CI。
+> 当前进度：工程主链已打通到 Prompt CI（quiet/json/report/git-diff/CI exit code），下一步聚焦插件化与生态扩展。
 
 ### v0.1
 

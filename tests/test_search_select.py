@@ -131,6 +131,90 @@ def test_search_command_runs_all_candidates_and_select_picks_best(
     assert "Constraints:" in select_result.output
 
 
+def test_search_and_select_support_output_json(tmp_path: Path, monkeypatch) -> None:
+    reset_db()
+    project_dir, db_path = _seed_search_project(tmp_path / "search_json_project")
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli_main, "build_model_adapter", lambda config: FakeTargetAdapter())
+
+    search_result = RUNNER.invoke(
+        app,
+        [
+            "search",
+            str(project_dir / "candidates"),
+            "--task",
+            str(project_dir / "tasks" / "task.yaml"),
+            "--dataset",
+            str(project_dir / "datasets" / "dataset.yaml"),
+            "--split",
+            "dev",
+            "--quiet",
+            "--output-json",
+        ],
+    )
+
+    assert search_result.exit_code == 0, search_result.output
+    search_payload = json.loads(search_result.output)
+    assert search_payload["kind"] == "search"
+    assert len(search_payload["results"]) == 2
+
+    db = Database(str(db_path))
+    db.create_tables()
+    with db.session() as session:
+        baseline_run = next(run for run in session.query(RunModel).all() if run.candidate_id == "baseline_001")
+
+    select_result = RUNNER.invoke(
+        app,
+        [
+            "select",
+            baseline_run.id,
+            "--primary",
+            "accuracy",
+            "--quiet",
+            "--output-json",
+        ],
+    )
+
+    assert select_result.exit_code == 0, select_result.output
+    select_payload = json.loads(select_result.output)
+    assert select_payload["kind"] == "select"
+    assert select_payload["selected_candidate_id"] == "rewrite_001"
+
+
+def test_search_changed_only_filters_candidates(tmp_path: Path, monkeypatch) -> None:
+    reset_db()
+    project_dir, _db_path = _seed_search_project(tmp_path / "search_changed_project")
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli_main, "build_model_adapter", lambda config: FakeTargetAdapter())
+    monkeypatch.setattr(
+        cli_main,
+        "_filter_candidate_files_by_git_diff",
+        lambda candidate_files, *, candidates_dir, git_base_ref: [
+            path for path in candidate_files if path.name == "rewrite.yaml"
+        ],
+    )
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "search",
+            str(project_dir / "candidates"),
+            "--task",
+            str(project_dir / "tasks" / "task.yaml"),
+            "--dataset",
+            str(project_dir / "datasets" / "dataset.yaml"),
+            "--changed-only",
+            "--quiet",
+            "--output-json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["candidate_id"] == "rewrite_001"
+
+
 def test_rollback_command_exports_candidate_yaml(tmp_path: Path, monkeypatch) -> None:
     reset_db()
     project_dir, db_path = _seed_search_project(tmp_path / "rollback_project")

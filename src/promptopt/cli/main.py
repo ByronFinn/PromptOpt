@@ -2,6 +2,8 @@
 
 import difflib
 import json
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +12,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from promptopt.cli.reporting import to_json_text, to_jsonable, write_report_file
 from promptopt.core import (
     Candidate,
     CandidateMetadata,
@@ -299,6 +302,110 @@ def _build_optimize_eval_payload(report: DiagnosticsReport) -> dict[str, object]
     }
 
 
+def _build_diagnostics_payload(
+    report: DiagnosticsReport,
+    *,
+    prompt_diff_text: str | None,
+) -> dict[str, object]:
+    return {
+        "kind": "diagnostics",
+        "report": to_jsonable(report),
+        "prompt_diff": prompt_diff_text,
+    }
+
+
+def _build_baseline_diff_payload(
+    report: BaselineDiffReport,
+    *,
+    prompt_diff_text: str | None,
+) -> dict[str, object]:
+    return {
+        "kind": "baseline_diff",
+        "report": to_jsonable(report),
+        "prompt_diff": prompt_diff_text,
+    }
+
+
+def _build_search_payload(results: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "kind": "search",
+        "results": to_jsonable(results),
+    }
+
+
+def _build_select_payload(
+    *,
+    seed_run_id: str,
+    selected_run_id: str,
+    selected_candidate_id: str,
+    primary: str,
+    secondary_metrics: list[str],
+    constraints: dict[str, float],
+    rows: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "kind": "select",
+        "seed_run_id": seed_run_id,
+        "selected_run_id": selected_run_id,
+        "selected_candidate_id": selected_candidate_id,
+        "primary": primary,
+        "secondary": secondary_metrics,
+        "constraints": constraints,
+        "candidates": rows,
+    }
+
+
+def _build_verify_payload(
+    *,
+    source_run_id: str,
+    verify_run_id: str,
+    split: str,
+    result: dict[str, object],
+    constraints: dict[str, float],
+    gate_failures: list[str],
+    regression_failures: list[str],
+    baseline_diff: dict[str, object] | None,
+) -> dict[str, object]:
+    return {
+        "kind": "verify",
+        "source_run_id": source_run_id,
+        "verify_run_id": verify_run_id,
+        "split": split,
+        "result": result,
+        "constraints": constraints,
+        "constraint_failures": gate_failures,
+        "regression_failures": regression_failures,
+        "baseline_diff": baseline_diff,
+        "exit_code": 2 if gate_failures or regression_failures else 0,
+    }
+
+
+def _emit_structured_output(
+    *,
+    title: str,
+    payload: dict[str, object],
+    quiet: bool,
+    output_json: bool,
+    report_file: Path | None,
+    report_format: str,
+    rich_renderer: Callable[[], None] | None = None,
+) -> None:
+    if report_file is not None:
+        write_report_file(
+            title=title,
+            payload=payload,
+            destination=report_file,
+            report_format=report_format,
+        )
+    if output_json:
+        typer.echo(to_json_text(payload))
+        return
+    if quiet:
+        return
+    if rich_renderer is not None:
+        rich_renderer()
+
+
 def _resolve_project_config_or_exit(candidate_paths: list[Path]) -> ProjectConfig:
     project_config = discover_project_config(candidate_paths)
     if project_config is None:
@@ -454,6 +561,38 @@ def _collect_candidate_files(candidates_dir: Path) -> list[Path]:
     return sorted(
         path for path in candidates_dir.glob("*.y*ml") if path.is_file()
     )
+
+
+def _filter_candidate_files_by_git_diff(
+    candidate_files: list[Path],
+    *,
+    candidates_dir: Path,
+    git_base_ref: str,
+) -> list[Path]:
+    command = [
+        "git",
+        "diff",
+        "--name-only",
+        f"{git_base_ref}...HEAD",
+        "--",
+        str(candidates_dir),
+    ]
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=Path.cwd(),
+    )
+    if completed.returncode != 0:
+        raise ValueError(completed.stderr.strip() or "git diff 执行失败")
+
+    changed_paths = {
+        (Path.cwd() / line.strip()).resolve()
+        for line in completed.stdout.splitlines()
+        if line.strip()
+    }
+    return [path for path in candidate_files if path.resolve() in changed_paths]
 
 
 def _constraints_failures(run: RunModel, constraints: dict[str, float]) -> list[str]:
@@ -663,6 +802,10 @@ def diagnose(
         help="用于对比的 baseline run ID",
     ),
     top_k: int = typer.Option(5, "--top-k", help="展示失败样本数量"),
+    quiet: bool = typer.Option(False, "--quiet", help="禁止控制台富文本输出"),
+    output_json: bool = typer.Option(False, "--output-json", help="输出 JSON 到 stdout"),
+    report_file: Path | None = typer.Option(None, "--report-file", help="导出 markdown/html 报告文件"),
+    report_format: str = typer.Option("markdown", "--report-format", help="报告格式：markdown 或 html"),
     export_failures: Path | None = typer.Option(
         None,
         "--export-failures",
@@ -726,11 +869,30 @@ def diagnose(
                 raise typer.Exit(code=1) from exc
 
     if isinstance(report, DiagnosticsReport):
-        _render_diagnostics_report(report)
+        payload = _build_diagnostics_payload(report, prompt_diff_text=prompt_diff_text)
+
+        def render() -> None:
+            _render_diagnostics_report(report)
+            if prompt_diff_text is not None:
+                _render_prompt_diff(prompt_diff_text)
+
     else:
-        _render_baseline_diff_report(report)
-    if prompt_diff_text is not None:
-        _render_prompt_diff(prompt_diff_text)
+        payload = _build_baseline_diff_payload(report, prompt_diff_text=prompt_diff_text)
+
+        def render() -> None:
+            _render_baseline_diff_report(report)
+            if prompt_diff_text is not None:
+                _render_prompt_diff(prompt_diff_text)
+
+    _emit_structured_output(
+        title=f"diagnose_{run_id}",
+        payload=payload,
+        quiet=quiet,
+        output_json=output_json,
+        report_file=report_file,
+        report_format=report_format,
+        rich_renderer=render,
+    )
 
     if export_failures is not None:
         if not isinstance(report, DiagnosticsReport):
@@ -862,10 +1024,24 @@ def search(
     task: Path = typer.Option(..., "--task", "-t", help="任务配置路径"),
     dataset: Path = typer.Option(..., "--dataset", "-d", help="数据集配置路径"),
     split: str = typer.Option("dev", "--split", "-s", help="数据集划分"),
+    changed_only: bool = typer.Option(False, "--changed-only", help="仅评估 Git diff 里的候选文件"),
+    git_base_ref: str = typer.Option("main", "--git-base-ref", help="Git diff 对比基准分支/引用"),
+    quiet: bool = typer.Option(False, "--quiet", help="禁止控制台富文本输出"),
+    output_json: bool = typer.Option(False, "--output-json", help="输出 JSON 到 stdout"),
 ) -> None:
     """批量评估候选."""
     split_value = _parse_split(split)
     candidate_files = _collect_candidate_files(candidates_dir)
+    if changed_only:
+        try:
+            candidate_files = _filter_candidate_files_by_git_diff(
+                candidate_files,
+                candidates_dir=candidates_dir,
+                git_base_ref=git_base_ref,
+            )
+        except ValueError as exc:
+            console.print(f"[red]✗ 无法读取 Git diff:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
     if not candidate_files:
         console.print(f"[red]✗ 未在目录中找到候选 YAML:[/red] {candidates_dir}")
         raise typer.Exit(code=1)
@@ -885,6 +1061,7 @@ def search(
     result_table.add_column("Candidate", style="green")
     result_table.add_column("Accuracy", justify="right")
     result_table.add_column("Metrics", style="yellow")
+    payload_rows: list[dict[str, object]] = []
 
     for candidate_file in candidate_files:
         candidate_spec = Candidate.from_yaml(candidate_file)
@@ -906,12 +1083,32 @@ def search(
             f"{result.accuracy:.2%}",
             metrics_display or "-",
         )
+        payload_rows.append(
+            {
+                "run_id": result.run_id,
+                "candidate_id": candidate_spec.id,
+                "candidate_file": str(candidate_file),
+                "accuracy": result.accuracy,
+                "metrics": result.aggregate_metrics,
+            }
+        )
 
-    console.print("[blue]批量评估:[/blue]")
-    console.print(f"  Candidates: {candidates_dir}")
-    console.print(f"  Task: {task}")
-    console.print(f"  Dataset: {dataset}")
-    console.print(result_table)
+    def render() -> None:
+        console.print("[blue]批量评估:[/blue]")
+        console.print(f"  Candidates: {candidates_dir}")
+        console.print(f"  Task: {task}")
+        console.print(f"  Dataset: {dataset}")
+        console.print(result_table)
+
+    _emit_structured_output(
+        title=f"search_{candidates_dir.name}",
+        payload=_build_search_payload(payload_rows),
+        quiet=quiet,
+        output_json=output_json,
+        report_file=None,
+        report_format="markdown",
+        rich_renderer=render,
+    )
 
 
 @app.command()
@@ -920,6 +1117,8 @@ def select(
     primary: str = typer.Option("accuracy", "--primary", help="主要指标"),
     secondary: str | None = typer.Option(None, "--secondary", help="次要指标(逗号分隔)"),
     constraints: str | None = typer.Option(None, "--constraints", help="约束条件，如 json_validity=1.0,max_latency=5000"),
+    quiet: bool = typer.Option(False, "--quiet", help="禁止控制台富文本输出"),
+    output_json: bool = typer.Option(False, "--output-json", help="输出 JSON 到 stdout"),
 ) -> None:
     """选择最优候选."""
     project_config = discover_project_config([Path.cwd()])
@@ -964,23 +1163,51 @@ def select(
             for metric_name in secondary_metrics:
                 table.add_column(metric_name, justify="right")
 
+        payload_rows: list[dict[str, object]] = []
         for run in constrained_runs:
             row = [run.id, run.candidate_id, f"{_metric_value_for_run(run, primary):.4f}"]
+            payload_row: dict[str, object] = {
+                "run_id": run.id,
+                "candidate_id": run.candidate_id,
+                primary: _metric_value_for_run(run, primary),
+            }
             for metric_name in secondary_metrics:
-                row.append(f"{_metric_value_for_run(run, metric_name):.4f}")
+                metric_value = _metric_value_for_run(run, metric_name)
+                row.append(f"{metric_value:.4f}")
+                payload_row[metric_name] = metric_value
             table.add_row(*row)
+            payload_rows.append(payload_row)
 
-    console.print("[blue]选择最优候选:[/blue]")
-    console.print(f"  Seed Run: {run_id}")
-    console.print(f"  Primary: {primary}")
-    if secondary_metrics:
-        console.print(f"  Secondary: {', '.join(secondary_metrics)}")
-    if effective_constraints:
-        console.print(
-            f"  Constraints: {', '.join(f'{key}={value}' for key, value in effective_constraints.items())}"
-        )
-    console.print(f"[green]✓[/green] 选中候选: {selected_candidate_id} ({selected_run_id})")
-    console.print(table)
+    def render() -> None:
+        console.print("[blue]选择最优候选:[/blue]")
+        console.print(f"  Seed Run: {run_id}")
+        console.print(f"  Primary: {primary}")
+        if secondary_metrics:
+            console.print(f"  Secondary: {', '.join(secondary_metrics)}")
+        if effective_constraints:
+            console.print(
+                f"  Constraints: {', '.join(f'{key}={value}' for key, value in effective_constraints.items())}"
+            )
+        console.print(f"[green]✓[/green] 选中候选: {selected_candidate_id} ({selected_run_id})")
+        console.print(table)
+
+    _emit_structured_output(
+        title=f"select_{run_id}",
+        payload=_build_select_payload(
+            seed_run_id=run_id,
+            selected_run_id=selected_run_id,
+            selected_candidate_id=selected_candidate_id,
+            primary=primary,
+            secondary_metrics=secondary_metrics,
+            constraints=effective_constraints,
+            rows=payload_rows,
+        ),
+        quiet=quiet,
+        output_json=output_json,
+        report_file=None,
+        report_format="markdown",
+        rich_renderer=render,
+    )
 
 
 @app.command()
@@ -989,6 +1216,10 @@ def verify(
     split: str = typer.Option("test", "--split", "-s", help="数据集划分"),
     baseline_run: str | None = typer.Option(None, "--baseline-run", help="用于回归检测的 baseline run ID"),
     constraints: str | None = typer.Option(None, "--constraints", help="约束条件，如 json_validity=1.0,max_latency=5000"),
+    quiet: bool = typer.Option(False, "--quiet", help="禁止控制台富文本输出"),
+    output_json: bool = typer.Option(False, "--output-json", help="输出 JSON 到 stdout"),
+    report_file: Path | None = typer.Option(None, "--report-file", help="导出 markdown/html 报告文件"),
+    report_format: str = typer.Option("markdown", "--report-format", help="报告格式：markdown 或 html"),
 ) -> None:
     """测试集验证."""
     split_value = _parse_split(split)
@@ -1041,6 +1272,7 @@ def verify(
         effective_constraints,
     )
     regression_messages: list[str] = []
+    baseline_payload: dict[str, object] | None = None
 
     if baseline_run is not None:
         db = get_db(project_config.db_path)
@@ -1091,11 +1323,7 @@ def verify(
             )
         if regression_count:
             console.print(f"[yellow]⚠[/yellow] Regression summary: {regression_count} 个失败/退化样本")
-        _render_baseline_diff_report(diff_report)
-
-    console.print("[blue]测试集验证:[/blue]")
-    console.print(f"  Source Run: {run_id}")
-    console.print(f"  Verify Split: {split_value.value}")
+        baseline_payload = _build_baseline_diff_payload(diff_report, prompt_diff_text=None)
 
     summary_table = Table(title=f"验证结果 · {result.run_id}")
     summary_table.add_column("字段", style="cyan")
@@ -1107,30 +1335,66 @@ def verify(
     summary_table.add_row("Samples", str(result.total_samples))
     summary_table.add_row("Accuracy", f"{result.accuracy:.2%}")
     summary_table.add_row("Latency", f"{result.latency_ms:.2f} ms/sample")
-    console.print(summary_table)
 
-    if result.aggregate_metrics:
-        metrics_table = Table(title="验证指标")
-        metrics_table.add_column("指标", style="magenta")
-        metrics_table.add_column("值", style="yellow", justify="right")
-        for metric_name, metric_value in sorted(result.aggregate_metrics.items()):
-            metrics_table.add_row(metric_name, f"{metric_value:.4f}")
-        console.print(metrics_table)
+    metrics_table = Table(title="验证指标")
+    metrics_table.add_column("指标", style="magenta")
+    metrics_table.add_column("值", style="yellow", justify="right")
+    for metric_name, metric_value in sorted(result.aggregate_metrics.items()):
+        metrics_table.add_row(metric_name, f"{metric_value:.4f}")
 
-    if effective_constraints:
-        console.print(
-            f"  Constraints: {', '.join(f'{key}={value}' for key, value in effective_constraints.items())}"
-        )
+    payload = _build_verify_payload(
+        source_run_id=run_id,
+        verify_run_id=result.run_id,
+        split=split_value.value,
+        result={
+            "task": task_spec.name,
+            "candidate": candidate_spec.id,
+            "model": engine.model_name,
+            "samples": result.total_samples,
+            "accuracy": result.accuracy,
+            "latency_ms": result.latency_ms,
+            "aggregate_metrics": result.aggregate_metrics,
+        },
+        constraints=effective_constraints,
+        gate_failures=gate_failures,
+        regression_failures=regression_messages,
+        baseline_diff=baseline_payload,
+    )
+
+    def render() -> None:
+        console.print("[blue]测试集验证:[/blue]")
+        console.print(f"  Source Run: {run_id}")
+        console.print(f"  Verify Split: {split_value.value}")
+        if effective_constraints:
+            console.print(
+                f"  Constraints: {', '.join(f'{key}={value}' for key, value in effective_constraints.items())}"
+            )
+        console.print(summary_table)
+        if result.aggregate_metrics:
+            console.print(metrics_table)
+        if baseline_payload is not None and baseline_run is not None:
+            _render_baseline_diff_report(diff_report)
+        if gate_failures or regression_messages:
+            console.print("[red]✗ Verify gate 未通过:[/red]")
+            for failure in gate_failures:
+                console.print(f"- Constraint failure: {failure}")
+            for message in regression_messages:
+                console.print(f"- Regression failure: {message}")
+        else:
+            console.print(f"[green]✓[/green] Verify Run 已保存: {result.run_id}")
+
+    _emit_structured_output(
+        title=f"verify_{result.run_id}",
+        payload=payload,
+        quiet=quiet,
+        output_json=output_json,
+        report_file=report_file,
+        report_format=report_format,
+        rich_renderer=render,
+    )
 
     if gate_failures or regression_messages:
-        console.print("[red]✗ Verify gate 未通过:[/red]")
-        for failure in gate_failures:
-            console.print(f"- Constraint failure: {failure}")
-        for message in regression_messages:
-            console.print(f"- Regression failure: {message}")
-        raise typer.Exit(code=1)
-
-    console.print(f"[green]✓[/green] Verify Run 已保存: {result.run_id}")
+        raise typer.Exit(code=2)
 
 
 @app.command()

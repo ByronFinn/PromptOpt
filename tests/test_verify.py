@@ -161,9 +161,40 @@ def test_verify_command_fails_on_regression(
         ],
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "Verify gate 未通过" in result.output
     assert "Regression failure" in result.output
+
+
+def test_verify_command_supports_output_json_and_report_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    reset_db()
+    project_dir, _db_path, source_run_id = _seed_verify_project(tmp_path / "verify_output_project")
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli_main, "build_model_adapter", lambda config: FakeVerifyAdapter())
+
+    report_path = project_dir / "reports" / "verify.md"
+    result = RUNNER.invoke(
+        app,
+        [
+            "verify",
+            source_run_id,
+            "--split",
+            "test",
+            "--quiet",
+            "--output-json",
+            "--report-file",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["kind"] == "verify"
+    assert payload["exit_code"] == 0
+    assert report_path.exists()
 
 
 

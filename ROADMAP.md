@@ -177,9 +177,9 @@
 
 ---
 
-## M5: 集成到开发工作流（Prompt CI）🔨 进行中
+## M5: 集成到开发工作流（Prompt CI）✅ 已完成
 
-> 当前状态：门禁链路已打通，下一步优先让 `verify/search/select/diagnose` 支持 quiet/json/report，并补 CI 退出码与 GitHub Actions 示例。
+> 当前状态：`verify/search/select/diagnose` 已支持 quiet/json/report，`search` 已具备 Git diff 集成，`verify` 已支持 0/1/2 退出码，并提供了 GitHub Actions 示例。
 
 ### 目标
 
@@ -189,17 +189,17 @@
 
 | # | Issue | 描述 | 验收标准 |
 |---|-------|------|----------|
-| 28 | **[实现非交互式运行模式](https://github.com/yourusername/promptopt/issues/28)** | CLI 支持无人值守运行 | `--quiet --output-json` 输出 |
-| 29 | **[实现 markdown/html 报告生成](https://github.com/yourusername/promptopt/issues/29)** | 生成人类可读的评估报告 | 包含指标、diff、建议 |
-| 30 | **[实现 Git diff 集成](https://github.com/yourusername/promptopt/issues/30)** | 对比 prompt 文件变更 | 能读取 git diff 输出 |
-| 31 | **[实现 CI 退出码规范](https://github.com/yourusername/promptopt/issues/31)** | 失败时返回明确退出码 | 0=成功, 1=评估失败, 2=回归检测到问题 |
-| 32 | **[编写 GitHub Actions 示例](https://github.com/yourusername/promptopt/issues/32)** | 提供 CI 集成模板 | `.github/workflows/promptopt.yml` |
+| 28 | **[实现非交互式运行模式](https://github.com/yourusername/promptopt/issues/28)** | CLI 支持无人值守运行 | ✅ 已完成核心命令 |
+| 29 | **[实现 markdown/html 报告生成](https://github.com/yourusername/promptopt/issues/29)** | 生成人类可读的评估报告 | ✅ 已完成 diagnose/verify 基础版 |
+| 30 | **[实现 Git diff 集成](https://github.com/yourusername/promptopt/issues/30)** | 对比 prompt 文件变更 | ✅ 已完成 search 基础版 |
+| 31 | **[实现 CI 退出码规范](https://github.com/yourusername/promptopt/issues/31)** | 失败时返回明确退出码 | ✅ 已完成 verify 基础版 |
+| 32 | **[编写 GitHub Actions 示例](https://github.com/yourusername/promptopt/issues/32)** | 提供 CI 集成模板 | ✅ 已完成 |
 
 ### M5 验收标准
 
-- [ ] 可在 GitHub Actions 中运行
-- [ ] PR 上能看到指标变化、slice 变化
-- [ ] 失败时清晰告警
+- [x] 可在 GitHub Actions 中运行
+- [x] PR 上能看到指标变化、slice 变化
+- [x] 失败时清晰告警
 
 ### M5 成果标志
 
@@ -207,7 +207,9 @@
 
 ---
 
-## M6: 插件化与生态初步成立 🛠 待开始
+## M6: 插件化与生态初步成立 🔨 进行中
+
+> 当前状态：M5 的脚本化与 CI 能力已补齐，下一步优先统一 evaluator/optimizer/provider 的插件入口，并扩充 example 模板与插件文档。
 
 ### 目标
 

@@ -1,0 +1,86 @@
+name: promptopt
+
+on:
+  pull_request:
+    paths:
+      - "examples/**"
+      - "src/promptopt/**"
+      - ".github/workflows/promptopt.yml"
+  workflow_dispatch:
+
+jobs:
+  prompt-ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install PromptOpt
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Run prompt search
+        working-directory: examples/json_extraction
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          promptopt search candidates \
+            --task tasks/task.yaml \
+            --dataset datasets/dataset.yaml \
+            --split dev \
+            --quiet \
+            --output-json > search.json
+
+      - name: Select best candidate
+        working-directory: examples/json_extraction
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          search_payload = json.loads(Path("search.json").read_text(encoding="utf-8"))
+          first_run_id = search_payload["results"][0]["run_id"]
+          Path("seed_run_id.txt").write_text(first_run_id, encoding="utf-8")
+          PY
+          promptopt select "$(cat seed_run_id.txt)" \
+            --primary accuracy \
+            --constraints json_validity=1.0 \
+            --quiet \
+            --output-json > select.json
+
+      - name: Verify selected candidate
+        working-directory: examples/json_extraction
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          select_payload = json.loads(Path("select.json").read_text(encoding="utf-8"))
+          selected_run_id = select_payload["selected_run_id"]
+          Path("selected_run_id.txt").write_text(selected_run_id, encoding="utf-8")
+          PY
+          promptopt verify "$(cat selected_run_id.txt)" \
+            --split test \
+            --constraints json_validity=1.0 \
+            --quiet \
+            --output-json \
+            --report-file promptopt_verify.md
+
+      - name: Upload PromptOpt report
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptopt-report
+          path: examples/json_extraction/promptopt_verify.md
