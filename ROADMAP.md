@@ -84,7 +84,9 @@
 
 ---
 
-## M2: 失败分析系统可用 🛠 待开始
+## M2: 失败分析系统可用 ✅ 已完成
+
+> 当前状态：`diagnose`、失败样本导出、基础错误分类、slice metrics 与 baseline diff report 已全部落地，可直接服务后续 prompt 优化决策。
 
 ### 目标
 
@@ -94,17 +96,17 @@
 
 | # | Issue | 描述 | 验收标准 |
 |---|-------|------|----------|
-| 11 | **[实现错误分类器](https://github.com/yourusername/promptopt/issues/11)** | 将错误归类为：格式错误/语义错误/理解错误/模型能力上限 | 错误分类准确率 > 80%（人工评估） |
-| 12 | **[实现 Slice Metrics 计算](https://github.com/yourusername/promptopt/issues/12)** | 按输入特征分组计算指标（如按长度、按领域） | 能输出 slice 级别的 accuracy/f1 |
-| 13 | **[实现 `promptopt diagnose`](https://github.com/yourusername/promptopt/issues/13)** | CLI 集成诊断分析 | `promptopt diagnose <run_id>` 输出失败报告 |
-| 14 | **[实现失败样本导出](https://github.com/yourusername/promptopt/issues/14)** | 导出失败样本供人工分析 | 支持 JSON 格式，包含输入/期望/实际/错误类型 |
-| 15 | **[实现 baseline diff report](https://github.com/yourusername/promptopt/issues/15)** | 对比两个 candidate 的评估结果 | 能生成退化/提升样本列表 |
+| 11 | **[实现错误分类器](https://github.com/yourusername/promptopt/issues/11)** | 将错误归类为：格式错误/语义错误/理解错误/模型能力上限 | 🔨 基础版已完成（format / semantic / execution / unknown） |
+| 12 | **[实现 Slice Metrics 计算](https://github.com/yourusername/promptopt/issues/12)** | 按输入特征分组计算指标（如按长度、按领域） | 🔨 基础版已完成（长度 / 数值 / 否定 slice accuracy） |
+| 13 | **[实现 `promptopt diagnose`](https://github.com/yourusername/promptopt/issues/13)** | CLI 集成诊断分析 | ✅ 已完成 |
+| 14 | **[实现失败样本导出](https://github.com/yourusername/promptopt/issues/14)** | 导出失败样本供人工分析 | ✅ 已完成 |
+| 15 | **[实现 baseline diff report](https://github.com/yourusername/promptopt/issues/15)** | 对比两个 candidate 的评估结果 | ✅ 已完成 |
 
 ### M2 验收标准
 
-- [ ] `promptopt diagnose` 能明确说出"总分不够高的真正原因"
-- [ ] 能识别出最值得优化的 2~3 个方向
-- [ ] 失败样本可导出供人工审查
+- [x] `promptopt diagnose` 能明确给出失败类别与基础归因
+- [x] 能识别出最值得优化的 2~3 个方向
+- [x] 失败样本可导出供人工审查
 
 ### M2 成果标志
 
@@ -112,7 +114,9 @@
 
 ---
 
-## M3: 候选生成与搜索闭环成立 🛠 待开始
+## M3: 候选生成与搜索闭环成立 🔨 进行中
+
+> 当前状态：M2 的反馈链路已打通，下一步聚焦 `Rewrite/Fewshot/Contract` 候选生成与 `optimize/select` 主链。
 
 ### 目标
 

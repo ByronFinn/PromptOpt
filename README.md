@@ -281,7 +281,7 @@ promptopt/
 
 ## Roadmap
 
-> 当前进度：`v0.1` 主链已打通（spec / eval runner / artifact 持久化），下一步聚焦 `v0.2 diagnostics`。
+> 当前进度：`v0.2` 主链已打通（diagnose / 导出失败样本 / baseline diff），下一步聚焦 `v0.3 prompt search`。
 
 ### v0.1
 
@@ -291,12 +291,12 @@ promptopt/
 
 ### v0.2
 
-* diagnostics（失败分析） 🔨
-* 报告生成
+* diagnostics（失败分析） ✅
+* 报告生成 ✅
 
 ### v0.3
 
-* prompt 搜索（rewrite / few-shot / contract）
+* prompt 搜索（rewrite / few-shot / contract） 🔨
 * selection
 
 ### v0.4

@@ -16,7 +16,12 @@ from promptopt.core import (
     build_model_adapter,
     discover_project_config,
 )
-from promptopt.storage import RunModel, get_db
+from promptopt.diagnostics import (
+    BaselineDiffReport,
+    DiagnosticsAnalyzer,
+    DiagnosticsReport,
+)
+from promptopt.storage import RunModel, SampleResultModel, get_db
 
 app = typer.Typer(
     name="promptopt",
@@ -40,6 +45,161 @@ def _write_template(path: Path, content: str) -> None:
     if path.exists():
         return
     path.write_text(content, encoding="utf-8")
+
+
+def _truncate_text(text: str, *, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1]}…"
+
+
+def _render_diagnostics_report(report: DiagnosticsReport) -> None:
+    summary_table = Table(title=f"失败分析 · {report.run_id}")
+    summary_table.add_column("字段", style="cyan")
+    summary_table.add_column("值", style="green")
+    summary_table.add_row("Task", report.task_id)
+    summary_table.add_row("Model", report.model_name or "-")
+    summary_table.add_row("Samples", str(report.total_samples))
+    summary_table.add_row("Failures", str(report.failed_samples))
+    summary_table.add_row("Accuracy", f"{report.accuracy:.2%}")
+    console.print(summary_table)
+
+    if report.aggregate_metrics:
+        metrics_table = Table(title="聚合指标")
+        metrics_table.add_column("指标", style="magenta")
+        metrics_table.add_column("值", style="yellow", justify="right")
+        for metric_name, metric_value in sorted(report.aggregate_metrics.items()):
+            metrics_table.add_row(metric_name, f"{metric_value:.4f}")
+        console.print(metrics_table)
+
+    if report.category_counts:
+        category_table = Table(title="失败类别分布")
+        category_table.add_column("类别", style="red")
+        category_table.add_column("数量", style="yellow", justify="right")
+        for category_name, count in sorted(report.category_counts.items()):
+            category_table.add_row(category_name, str(count))
+        console.print(category_table)
+
+    if report.slice_metrics:
+        slice_table = Table(title="Slice 指标")
+        slice_table.add_column("Slice", style="blue")
+        slice_table.add_column("Total", justify="right")
+        slice_table.add_column("Failed", justify="right")
+        slice_table.add_column("Accuracy", justify="right")
+        for slice_name, metrics in sorted(report.slice_metrics.items()):
+            total = metrics.get("total", 0)
+            failed = metrics.get("failed", 0)
+            accuracy = metrics.get("accuracy", 0.0)
+            total_display = str(total) if isinstance(total, int) else "0"
+            failed_display = str(failed) if isinstance(failed, int) else "0"
+            accuracy_display = f"{accuracy:.2%}" if isinstance(accuracy, float) else "0.00%"
+            slice_table.add_row(slice_name, total_display, failed_display, accuracy_display)
+        console.print(slice_table)
+
+    if report.top_failures:
+        failure_table = Table(title="Top 失败样本")
+        failure_table.add_column("Sample", style="cyan")
+        failure_table.add_column("Category", style="red")
+        failure_table.add_column("Reason", style="yellow")
+        failure_table.add_column("Input", style="green")
+        for failure in report.top_failures:
+            failure_table.add_row(
+                failure.sample_id,
+                failure.category.value,
+                _truncate_text(failure.reason, limit=48),
+                _truncate_text(failure.input_text, limit=36),
+            )
+        console.print(failure_table)
+
+    if report.suggestions:
+        console.print("[blue]建议:[/blue]")
+        for suggestion in report.suggestions:
+            console.print(f"- {suggestion}")
+
+
+def _render_baseline_diff_report(report: BaselineDiffReport) -> None:
+    summary_table = Table(title=f"Baseline Diff · {report.run_id}")
+    summary_table.add_column("字段", style="cyan")
+    summary_table.add_column("值", style="green")
+    summary_table.add_row("Task", report.task_id)
+    summary_table.add_row("Split", report.split)
+    summary_table.add_row("Baseline Run", report.baseline_run_id)
+    summary_table.add_row("Candidate Run", report.run_id)
+    summary_table.add_row("Matched Samples", str(report.matched_samples))
+    summary_table.add_row("Baseline Accuracy", f"{report.baseline_accuracy:.2%}")
+    summary_table.add_row("Candidate Accuracy", f"{report.accuracy:.2%}")
+    summary_table.add_row("Accuracy Delta", f"{report.accuracy_delta:+.2%}")
+    summary_table.add_row("Still Correct", str(report.still_correct))
+    summary_table.add_row("Still Failed", str(report.still_failed))
+    console.print(summary_table)
+
+    warnings: list[str] = []
+    if report.baseline_only_samples:
+        warnings.append(f"baseline only: {len(report.baseline_only_samples)}")
+    if report.candidate_only_samples:
+        warnings.append(f"candidate only: {len(report.candidate_only_samples)}")
+    if report.conflicted_samples:
+        warnings.append(f"conflicts: {len(report.conflicted_samples)}")
+    if warnings:
+        console.print(f"[yellow]⚠ 对齐警告:[/yellow] {'; '.join(warnings)}")
+
+    if report.aggregate_metric_deltas:
+        delta_table = Table(title="聚合指标 Delta")
+        delta_table.add_column("指标", style="magenta")
+        delta_table.add_column("Delta", style="yellow", justify="right")
+        for metric_name, delta in sorted(report.aggregate_metric_deltas.items()):
+            delta_table.add_row(metric_name, f"{delta:+.4f}")
+        console.print(delta_table)
+
+    if report.regressions:
+        regression_table = Table(title="退化样本")
+        regression_table.add_column("Sample", style="cyan")
+        regression_table.add_column("当前类别", style="red")
+        regression_table.add_column("原因", style="yellow")
+        regression_table.add_column("Input", style="green")
+        for sample_diff in report.regressions:
+            category = (
+                sample_diff.candidate_failure.category.value
+                if sample_diff.candidate_failure is not None
+                else "unknown"
+            )
+            reason = (
+                sample_diff.candidate_failure.reason
+                if sample_diff.candidate_failure is not None
+                else "基线正确，但当前 run 回退。"
+            )
+            regression_table.add_row(
+                sample_diff.sample_id,
+                category,
+                _truncate_text(reason, limit=48),
+                _truncate_text(sample_diff.input_text, limit=36),
+            )
+        console.print(regression_table)
+
+    if report.improvements:
+        improvement_table = Table(title="提升样本")
+        improvement_table.add_column("Sample", style="cyan")
+        improvement_table.add_column("基线类别", style="blue")
+        improvement_table.add_column("原因", style="yellow")
+        improvement_table.add_column("Input", style="green")
+        for sample_diff in report.improvements:
+            category = (
+                sample_diff.baseline_failure.category.value
+                if sample_diff.baseline_failure is not None
+                else "unknown"
+            )
+            reason = (
+                sample_diff.baseline_failure.reason
+                if sample_diff.baseline_failure is not None
+                else "当前 run 修复了基线失败。"
+            )
+            improvement_table.add_row(
+                sample_diff.sample_id,
+                category,
+                _truncate_text(reason, limit=48),
+                _truncate_text(sample_diff.input_text, limit=36),
+            )
+        console.print(improvement_table)
 
 PROMPTOPT_CONFIG_TEMPLATE = """# PromptOpt Local Configuration
 
@@ -212,12 +372,72 @@ def eval(
 @app.command()
 def diagnose(
     run_id: str = typer.Argument(..., help="Run ID"),
+    baseline_run: str | None = typer.Option(
+        None,
+        "--baseline-run",
+        help="用于对比的 baseline run ID",
+    ),
+    top_k: int = typer.Option(5, "--top-k", help="展示失败样本数量"),
+    export_failures: Path | None = typer.Option(
+        None,
+        "--export-failures",
+        help="将失败样本导出为 JSON 文件",
+    ),
 ) -> None:
     """分析失败案例."""
-    console.print(f"[blue]分析 Run:[/blue] {run_id}")
-    
-    # Placeholder - actual diagnosis logic goes here
-    console.print("[yellow]诊断功能开发中...[/yellow]")
+    project_config = discover_project_config([Path.cwd()])
+    db = get_db(project_config.db_path if project_config else None)
+    analyzer = DiagnosticsAnalyzer()
+    report: DiagnosticsReport | BaselineDiffReport
+
+    with db.session() as session:
+        run = session.get(RunModel, run_id)
+        if run is None:
+            console.print(f"[red]✗ 未找到 Run:[/red] {run_id}")
+            raise typer.Exit(code=1)
+
+        sample_results = (
+            session.query(SampleResultModel)
+            .filter(SampleResultModel.run_id == run_id)
+            .order_by(SampleResultModel.sample_id.asc())
+            .all()
+        )
+        if baseline_run is None:
+            report = analyzer.analyze_run(run, sample_results, top_k=top_k)
+        else:
+            baseline = session.get(RunModel, baseline_run)
+            if baseline is None:
+                console.print(f"[red]✗ 未找到 Baseline Run:[/red] {baseline_run}")
+                raise typer.Exit(code=1)
+            baseline_sample_results = (
+                session.query(SampleResultModel)
+                .filter(SampleResultModel.run_id == baseline_run)
+                .order_by(SampleResultModel.sample_id.asc())
+                .all()
+            )
+            try:
+                report = analyzer.compare_runs(
+                    baseline,
+                    baseline_sample_results,
+                    run,
+                    sample_results,
+                    top_k=top_k,
+                )
+            except ValueError as exc:
+                console.print(f"[red]✗ 无法比较 runs:[/red] {exc}")
+                raise typer.Exit(code=1) from exc
+
+    if isinstance(report, DiagnosticsReport):
+        _render_diagnostics_report(report)
+    else:
+        _render_baseline_diff_report(report)
+
+    if export_failures is not None:
+        if not isinstance(report, DiagnosticsReport):
+            console.print("[red]✗ baseline diff 模式暂不支持 --export-failures。[/red]")
+            raise typer.Exit(code=1)
+        analyzer.export_failures(report.failures, export_failures)
+        console.print(f"[green]✓[/green] 失败样本已导出到: {export_failures}")
 
 
 @app.command()
