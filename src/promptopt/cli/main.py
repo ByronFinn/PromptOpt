@@ -35,6 +35,7 @@ from promptopt.optimizers import ContractOptimizer, FewShotOptimizer, RewriteOpt
 from promptopt.plugins import get_optimizer_registry
 from promptopt.storage import RunModel, SampleResultModel, get_db
 from promptopt.storage.models import CandidateModel, LineageModel
+from promptopt.web import create_app as create_web_app
 
 app = typer.Typer(
     name="promptopt",
@@ -1485,6 +1486,18 @@ def rollback(
 
     _write_candidate_yaml(rollback_candidate, output_path)
     console.print(f"[green]✓[/green] 已导出回滚候选: {output_path}")
+
+
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", "--host", help="Web UI 监听地址"),
+    port: int = typer.Option(8000, "--port", help="Web UI 监听端口"),
+    db_path: str | None = typer.Option(None, "--db-path", help="可选的数据库路径覆盖"),
+) -> None:
+    """启动 PromptOpt Web UI。"""
+    import uvicorn
+
+    uvicorn.run(create_web_app(db_path=db_path), host=host, port=port)
 
 
 @app.command()

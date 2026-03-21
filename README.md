@@ -281,7 +281,7 @@ promptopt/
 
 ## Roadmap
 
-> 当前进度：工程主链已打通到插件化与模板生态（plugin registry / templates / docs），下一步聚焦团队协作与可视化。
+> 当前进度：M1–M7 路线图核心任务已全部落地，当前项目已具备从评估、诊断、搜索、门禁、CI 到 Web/Registry 的基础闭环。
 
 ### v0.1
 

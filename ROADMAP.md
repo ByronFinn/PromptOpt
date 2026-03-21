@@ -237,9 +237,9 @@
 
 ---
 
-## M7: 团队协作与可视化平台 🔨 进行中
+## M7: 团队协作与可视化平台 ✅ 已完成
 
-> 当前状态：核心 CLI、门禁、CI 与插件化都已具备，下一步聚焦最小 Web UI、run 对比、slice 可视化与 prompt registry/审批流。
+> 当前状态：最小 Web UI、run 对比、slice 可视化、Prompt Registry 与候选审批流基础版已全部落地。
 
 ### 目标
 
@@ -251,21 +251,27 @@
 
 | # | Issue | 描述 | 验收标准 |
 |---|-------|------|----------|
-| 38 | **[实现 Web UI 基础框架](https://github.com/yourusername/promptopt/issues/38)** | 查看 runs / lineage / diff | React/Vue 前端 + FastAPI 后端 |
-| 39 | **[实现 run 对比视图](https://github.com/yourusername/promptopt/issues/39)** | 并排比较两个 run 的结果 | 表格 + 可视化图表 |
-| 40 | **[实现 slice 可视化](https://github.com/yourusername/promptopt/issues/40)** | 按特征分组展示指标 | 支持按长度/领域等分组 |
-| 41 | **[实现 Prompt Registry](https://github.com/yourusername/promptopt/issues/41)** | 团队共享 prompt 库 | 版本控制 + 审批流 |
-| 42 | **[实现候选审批流](https://github.com/yourusername/promptopt/issues/42)** | 候选上线前的审核 | 状态机：draft → review → approved → deployed |
+| 38 | **[实现 Web UI 基础框架](https://github.com/yourusername/promptopt/issues/38)** | 查看 runs / lineage / diff | ✅ 已完成基础版 |
+| 39 | **[实现 run 对比视图](https://github.com/yourusername/promptopt/issues/39)** | 并排比较两个 run 的结果 | ✅ 已完成基础版 |
+| 40 | **[实现 slice 可视化](https://github.com/yourusername/promptopt/issues/40)** | 按特征分组展示指标 | ✅ 已完成基础版 |
+| 41 | **[实现 Prompt Registry](https://github.com/yourusername/promptopt/issues/41)** | 团队共享 prompt 库 | ✅ 已完成基础版 |
+| 42 | **[实现候选审批流](https://github.com/yourusername/promptopt/issues/42)** | 候选上线前的审核 | ✅ 已完成基础版 |
 
 ### M7 验收标准
 
-- [ ] 非技术人员能看懂本次改动值不值得用
-- [ ] 能找到历史最佳 prompt
-- [ ] 能查看上线前的验证记录
+- [x] 非技术人员能看懂本次改动值不值得用
+- [x] 能找到历史最佳 prompt
+- [x] 能查看上线前的验证记录
 
 ### M7 成果标志
 
 > **团队级 PromptOps 平台** - 团队协作与可视化
+
+---
+
+## 当前结论
+
+M1–M7 路线图中的核心任务已全部完成，并已通过测试、lint 与类型检查验证。后续工作重点将转向：性能、体验、权限、并行化和更强的生产化细节。
 
 ---
 

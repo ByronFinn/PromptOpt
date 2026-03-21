@@ -85,6 +85,27 @@ class LineageModel(Base):
         return f"<LineageModel(candidate_id={self.candidate_id})>"
 
 
+class PromptRegistryEntryModel(Base):
+    """Prompt registry and approval-flow state model."""
+
+    __tablename__ = "prompt_registry_entries"
+
+    candidate_id: Mapped[str] = mapped_column(String(100), ForeignKey("candidates.id"), primary_key=True)
+    registry_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    source_run_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    verify_run_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deployed_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    deployed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    def __repr__(self) -> str:
+        return f"<PromptRegistryEntryModel(candidate_id={self.candidate_id}, state={self.state})>"
+
+
 class SampleResultModel(Base):
     """Per-sample evaluation result storage model."""
 

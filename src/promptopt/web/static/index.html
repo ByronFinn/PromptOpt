@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>PromptOpt Web</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; padding: 24px; background: #f8fafc; color: #0f172a; }
+      h1, h2 { margin-top: 0; }
+      .layout { display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; }
+      .card { background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(15, 23, 42, 0.08); padding: 16px; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border-bottom: 1px solid #e2e8f0; padding: 8px; text-align: left; }
+      th { background: #f1f5f9; }
+      button { border: none; border-radius: 8px; padding: 8px 12px; background: #2563eb; color: white; cursor: pointer; }
+      button.secondary { background: #0f766e; }
+      pre { white-space: pre-wrap; background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; max-height: 320px; overflow: auto; }
+      .bar { height: 10px; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
+      .bar > span { display: block; height: 100%; background: #22c55e; }
+      .controls { display: flex; gap: 8px; margin-bottom: 12px; }
+      input { padding: 8px; border-radius: 8px; border: 1px solid #cbd5e1; }
+      ul { padding-left: 20px; }
+    </style>
+  </head>
+  <body>
+    <h1>PromptOpt Web</h1>
+    <div class="layout">
+      <section class="card">
+        <h2>Runs</h2>
+        <table id="runs-table">
+          <thead>
+            <tr><th>Run</th><th>Candidate</th><th>Accuracy</th><th>Split</th><th>操作</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+      <section class="card">
+        <h2>Details</h2>
+        <div id="details">请选择一个 run 查看详情。</div>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:20px;">
+      <h2>Compare</h2>
+      <div class="controls">
+        <input id="baseline-run" placeholder="baseline run id" />
+        <input id="candidate-run" placeholder="candidate run id" />
+        <button id="compare-button">Compare</button>
+      </div>
+      <div id="compare-result">请输入两个 run id 后点击 Compare。</div>
+    </section>
+
+    <section class="card" style="margin-top:20px;">
+      <h2>Prompt Registry</h2>
+      <div id="registry">加载中…</div>
+    </section>
+
+    <script>
+      async function fetchJson(url, options) {
+        const response = await fetch(url, options);
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        return response.json();
+      }
+
+      function renderRuns(runs) {
+        const tbody = document.querySelector('#runs-table tbody');
+        tbody.innerHTML = '';
+        for (const run of runs) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${run.id}</td>
+            <td>${run.candidate_id}</td>
+            <td>${(run.accuracy * 100).toFixed(2)}%</td>
+            <td>${run.split}</td>
+            <td><button data-run="${run.id}">详情</button></td>
+          `;
+          tr.querySelector('button').addEventListener('click', () => loadRunDetails(run.id));
+          tbody.appendChild(tr);
+        }
+      }
+
+      function renderSliceMetrics(sliceMetrics) {
+        const entries = Object.entries(sliceMetrics || {});
+        if (!entries.length) {
+          return '<p>无 slice 指标</p>';
+        }
+        return entries.map(([name, metrics]) => `
+          <div style="margin-bottom:10px;">
+            <strong>${name}</strong> · ${(metrics.accuracy * 100).toFixed(2)}% (${metrics.total} samples)
+            <div class="bar"><span style="width:${metrics.accuracy * 100}%"></span></div>
+          </div>
+        `).join('');
+      }
+
+      async function loadRunDetails(runId) {
+        const [runData, diagnosticsData] = await Promise.all([
+          fetchJson(`/api/runs/${runId}`),
+          fetchJson(`/api/runs/${runId}/diagnostics`),
+        ]);
+        const details = document.getElementById('details');
+        const report = diagnosticsData.report;
+        details.innerHTML = `
+          <h3>${runData.run.id}</h3>
+          <p><strong>Task:</strong> ${runData.run.task_id}</p>
+          <p><strong>Candidate:</strong> ${runData.run.candidate_id}</p>
+          <p><strong>Model:</strong> ${runData.run.model_name || '-'}</p>
+          <p><strong>Accuracy:</strong> ${(runData.run.accuracy * 100).toFixed(2)}%</p>
+          <h4>Suggestions</h4>
+          <ul>${(report.suggestions || []).map(item => `<li>${item}</li>`).join('')}</ul>
+          <h4>Slice Metrics</h4>
+          ${renderSliceMetrics(report.slice_metrics)}
+          <h4>Prompt Diff</h4>
+          <pre>${diagnosticsData.prompt_diff || '无 prompt diff'}</pre>
+        `;
+      }
+
+      async function loadCompare() {
+        const baselineRun = document.getElementById('baseline-run').value.trim();
+        const candidateRun = document.getElementById('candidate-run').value.trim();
+        if (!baselineRun || !candidateRun) {
+          return;
+        }
+        const compareData = await fetchJson(`/api/compare?baseline_run_id=${encodeURIComponent(baselineRun)}&candidate_run_id=${encodeURIComponent(candidateRun)}`);
+        const diffReport = compareData.diff_report;
+        document.getElementById('compare-result').innerHTML = `
+          <p><strong>Accuracy Delta:</strong> ${(diffReport.accuracy_delta * 100).toFixed(2)}%</p>
+          <p><strong>Regressions:</strong> ${diffReport.regressions.length}</p>
+          <p><strong>Improvements:</strong> ${diffReport.improvements.length}</p>
+          <h4>Regressed Slices</h4>
+          <pre>${JSON.stringify(compareData.regressed_slices, null, 2)}</pre>
+          <h4>Prompt Diff</h4>
+          <pre>${compareData.prompt_diff || '无 prompt diff'}</pre>
+        `;
+      }
+
+      async function loadRegistry() {
+        const data = await fetchJson('/api/registry');
+        const entries = data.entries || [];
+        if (!entries.length) {
+          document.getElementById('registry').innerHTML = '<p>暂无 registry entries。</p>';
+          return;
+        }
+        const rows = entries.map(entry => `<tr><td>${entry.candidate_id}</td><td>${entry.registry_key}</td><td>${entry.state}</td></tr>`).join('');
+        document.getElementById('registry').innerHTML = `<table><thead><tr><th>Candidate</th><th>Registry Key</th><th>State</th></tr></thead><tbody>${rows}</tbody></table>`;
+      }
+
+      document.getElementById('compare-button').addEventListener('click', () => {
+        loadCompare().catch(error => {
+          document.getElementById('compare-result').textContent = error.message;
+        });
+      });
+
+      Promise.all([
+        fetchJson('/api/runs').then(data => renderRuns(data.runs || [])),
+        loadRegistry(),
+      ]).catch(error => {
+        document.getElementById('details').textContent = error.message;
+      });
+    </script>
+  </body>
+</html>
