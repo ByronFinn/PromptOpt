@@ -1,0 +1,56 @@
+# Domain Docs
+
+How the engineering skills should consume this repo's domain documentation when exploring the codebase.
+
+## Before exploring, read these
+
+- **`CONTEXT.md`** at the repo root — domain glossary (core concepts, terminology, relationships)
+- **`docs/prd/`** — product requirements documents. Skills like `improve-architecture` and `review` read these for planned features and acceptance criteria.
+- **`docs/adr/`** — architecture decision records. Read ADRs that touch the area you're about to work in.
+- **`docs/research/INDEX.md`** — searchable index of persisted technical research records (stack × topic × major). `/think` Step 5 queries it before re-searching; `/research` produces records here.
+
+If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The producer skills (`/grill` for CONTEXT.md and ADRs, `/think` or `/story` for PRDs) create them lazily.
+
+## What to do if files are missing
+
+If `CONTEXT.md` doesn't exist yet, consumer skills should proceed without it. The first run of `/grill` will create it lazily. Do not create an empty `CONTEXT.md` during setup — an empty file is noise.
+
+Same for `docs/adr/` and `docs/research/` — create them only when there's actual content to write.
+
+## File structure
+
+Single-context repo:
+
+```
+/
+├── CONTEXT.md
+├── docs/
+│   ├── agents/
+│   │   ├── issue-tracker.md
+│   │   ├── triage-labels.md
+│   │   ├── domain.md
+│   │   └── language.md
+│   ├── prd/
+│   │   └── PRD-0000-promptopt-v2-gepa-go-rewrite.md
+│   ├── adr/                  (lazily created by /grill)
+│   └── research/             (lazily created by /research)
+└── src/                      (v1 Python archive — to be replaced by Go module layout in V0)
+```
+
+**File naming conventions** (producer skills define these; consumer skills read them):
+
+- PRD: `PRD-NNNN-<title>.md` — see `PRD-FORMAT.md` (dev-skills /think)
+- ADR: `<NNNN>-<title>.md` (no `ADR-` prefix) — see `ADR-FORMAT.md` (dev-skills /grill)
+- Research: `<stack>-<topic>-<major>.md` — see `RESEARCH-FORMAT.md` (dev-skills /research)
+
+## Use the glossary's vocabulary
+
+When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+
+If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/grill`).
+
+## Flag ADR conflicts
+
+If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
+
+> _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_

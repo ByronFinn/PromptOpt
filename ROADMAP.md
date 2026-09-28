@@ -1,358 +1,194 @@
-# PromptOpt Roadmap
+# PromptOpt v2 Roadmap
 
-> **评估驱动的 Prompt 工程基础设施**
+> **输入一个提示词，输出最优提示词 —— 预算受控、可干预可托管的多范式提示词优化平台**
 
-基于用户愿景与项目当前状态，制定以下可执行路线图。
-
----
-
-## 项目当前状态
-
-| 模块 | 状态 | 说明 |
-|------|------|------|
-| CLI 框架 | ✅ 完成 | typer + rich，命令桩已搭建 |
-| 核心模型 | ✅ 完成 | Task, Dataset, Candidate, Run, EvalResult |
-| 存储模型 | ✅ 完成 | SQLAlchemy models |
-| 评估器接口 | ✅ 完成 | Evaluator ABC + 3 个实现 |
-| 模型适配器 | ✅ 完成 | LiteLLM adapter |
-| 优化器基类 | ⚠️ 部分 | Rewrite placeholder |
-| 诊断分析器 | ⚠️ 部分 | Stub 实现 |
-| **评估引擎** | ❌ 未完成 | `eval` 命令为空 |
-| **数据加载** | ❌ 未完成 | Dataset loader 未实现 |
-| **LLM 集成** | ⚠️ 部分 | Adapter 有但未真正调用 |
-| **CI/CD** | ❌ 未完成 | - |
+基于 PRD-0000（[docs/prd/PRD-0000-promptopt-v2-gepa-go-rewrite.md](docs/prd/PRD-0000-promptopt-v2-gepa-go-rewrite.md)，父 Issue #49）制定。本版取代旧 M0–M7 Python 路线（旧 issue 已全部关闭处置，v1 代码归档于 tag `v0.1-python`）。
 
 ---
 
-## M0: 立项校准期 ✅ 已完成
+## 产品形态
 
-项目定位已明确：
-- **一句话定位**: 评估驱动的 Prompt 搜索与回归测试框架
-- **目标用户**: 需要迭代优化 Prompt 的开发团队
-- **核心价值**: 可评估、可搜索、可回归、可审计、可集成
+```text
+$ promptopt run "从病历文本中抽取结构化不良反应信息，输出 JSON"
 
-**验收标准**: 能清楚回答 4 个问题（已达成）
+ ① Harness Builder   AI 合成任务规格 + 评测集 + 指标（p¹ 方差过滤提纯）
+ ② GEPA 引擎         反思突变 + Pareto 前沿 + VISTA 稳定性防护，预算阀门控制
+ ③ 输出              最优提示词 + lineage + 解释性报告
 
----
-
-## M1: 评估底座可用 🔨 进行中
-
-### 目标
-
-先把"测得准、存得全"做出来。
-
-### 必须完成的 Issues
-
-#### P0 - 核心阻塞
-
-| # | Issue | 描述 | 验收标准 |
-|---|-------|------|----------|
-| 1 | **[实现数据集加载器](https://github.com/yourusername/promptopt/issues/1)** | 实现 `DatasetLoader` 支持 JSON/YAML/CSV 格式 | 能加载 `examples/json_extraction/datasets/dataset.yaml` 并返回样本列表 |
-| 2 | **[实现 TaskSpec 规范解析器](https://github.com/yourusername/promptopt/issues/2)** | 解析 `task.yaml` 为 `Task` 对象 | `Task.from_yaml()` 正常工作 |
-| 3 | **[实现 Candidate 规范解析器](https://github.com/yourusername/promptopt/issues/3)** | 解析 `candidate.yaml` 为 `Candidate` 对象 | `Candidate.from_yaml()` 正常工作 |
-| 4 | **[实现评估引擎核心](https://github.com/yourusername/promptopt/issues/4)** | 实现 `EvaluationEngine.run(task, candidate, dataset)` | 能对数据集运行评估并返回 `RunResult` |
-| 5 | **[实现 promptopt eval 命令](https://github.com/yourusername/promptopt/issues/5)** | 将评估引擎接入 CLI | `promptopt eval --task x --candidate x --dataset x` 能运行并输出结果 |
-
-#### P1 - 存储完整性
-
-| # | Issue | 描述 | 验收标准 |
-|---|-------|------|----------|
-| 6 | **[实现 Run 结果持久化](https://github.com/yourusername/promptopt/issues/6)** | 将 `RunResult` 存入 SQLite | 二次运行结果可查询 |
-| 7 | **[实现 sample-level 结果存储](https://github.com/yourusername/promptopt/issues/7)** | 存储每个样本的评估详情 | 可追溯单个样本的输入/输出/评分 |
-
-#### P2 - 基础体验
-
-| # | Issue | 描述 | 验收标准 |
-|---|-------|------|----------|
-| 8 | **[修复 mypy 错误](https://github.com/yourusername/promptopt/issues/8)** | `generate_stream` 返回类型不兼容 | `uv run mypy src/` 通过 |
-| 9 | **[修复 ruff lint](https://github.com/yourusername/promptopt/issues/9)** | Import 排序和类型导入问题 | `uv run ruff check src/` 通过 |
-| 10 | **[实现 `promptopt init` 完整逻辑](https://github.com/yourusername/promptopt/issues/10)** | 生成完整项目模板而非空目录 | `promptopt init myproject` 生成可用模板 |
-
-### M1 验收标准
-
-- [ ] `promptopt eval` 能对真实任务运行评估
-- [ ] 评估结果可复现（二次运行一致或可解释差异）
-- [ ] `promptopt list-runs` 能查询历史运行记录
-- [ ] Sample-level 结果可导出
-- [ ] 类型检查和 lint 全部通过
-
-### M1 成果标志
-
-> **Prompt benchmark runner** - 可对任务跑评估并存储结果
-
----
-
-## M2: 失败分析系统可用 🛠 待开始
-
-### 目标
-
-从"知道分数"升级到"知道为什么"。
-
-### 必须完成的 Issues
-
-| # | Issue | 描述 | 验收标准 |
-|---|-------|------|----------|
-| 11 | **[实现错误分类器](https://github.com/yourusername/promptopt/issues/11)** | 将错误归类为：格式错误/语义错误/理解错误/模型能力上限 | 错误分类准确率 > 80%（人工评估） |
-| 12 | **[实现 Slice Metrics 计算](https://github.com/yourusername/promptopt/issues/12)** | 按输入特征分组计算指标（如按长度、按领域） | 能输出 slice 级别的 accuracy/f1 |
-| 13 | **[实现 `promptopt diagnose`](https://github.com/yourusername/promptopt/issues/13)** | CLI 集成诊断分析 | `promptopt diagnose <run_id>` 输出失败报告 |
-| 14 | **[实现失败样本导出](https://github.com/yourusername/promptopt/issues/14)** | 导出失败样本供人工分析 | 支持 JSON 格式，包含输入/期望/实际/错误类型 |
-| 15 | **[实现 baseline diff report](https://github.com/yourusername/promptopt/issues/15)** | 对比两个 candidate 的评估结果 | 能生成退化/提升样本列表 |
-
-### M2 验收标准
-
-- [ ] `promptopt diagnose` 能明确说出"总分不够高的真正原因"
-- [ ] 能识别出最值得优化的 2~3 个方向
-- [ ] 失败样本可导出供人工审查
-
-### M2 成果标志
-
-> **Prompt diagnostics tool** - 能解释为什么失败
-
----
-
-## M3: 候选生成与搜索闭环成立 🛠 待开始
-
-### 目标
-
-从"分析工具"升级成"优化系统"。
-
-### 必须完成的 Issues
-
-| # | Issue | 描述 | 验收标准 |
-|---|-------|------|----------|
-| 16 | **[实现 RewriteOptimizer](https://github.com/yourusername/promptopt/issues/16)** | 基于 LLM 重写指令 | 能生成 3+ 个 instruction 变体 |
-| 17 | **[实现 FewshotOptimizer](https://github.com/yourusername/promptopt/issues/17)** | 生成 few-shot 示例 | 能从 dev 集自动选取示例 |
-| 18 | **[实现 ContractOptimizer](https://github.com/yourusername/promptopt/issues/18)** | 强化 JSON 输出约束 | 能生成更严格的 schema 约束 |
-| 19 | **[实现 `promptopt optimize`](https://github.com/yourusername/promptopt/issues/19)** | CLI 集成候选生成 | `promptopt optimize <run_id> --strategies rewrite,fewshot` |
-| 20 | **[实现多候选并行评估](https://github.com/yourusername/promptopt/issues/20)** | 批量评估 N 个候选 | 支持并行评估，输出 comparison table |
-| 21 | **[实现 `promptopt select`](https://github.com/yourusername/promptopt/issues/21)** | 按指标选择最优候选 | 支持 primary/secondary 指标约束 |
-| 22 | **[实现候选 lineage 追踪](https://github.com/yourusername/promptopt/issues/22)** | 记录候选的父子关系和 diff | lineage 可视化 |
-
-### M3 验收标准
-
-- [ ] 给定 baseline，能自动生成 12+ 个候选
-- [ ] 批量评估后能选出满足约束的最优候选
-- [ ] 输出 candidate lineage 和 diff
-
-### M3 成果标志
-
-> **Eval-driven prompt search framework** - 可生成并比较多个候选
-
----
-
-## M4: 回归门禁与上线控制 🛠 待开始
-
-### 目标
-
-让项目进入"工程可用"状态，而不是实验玩具。
-
-### 必须完成的 Issues
-
-| # | Issue | 描述 | 验收标准 |
-|---|-------|------|----------|
-| 23 | **[实现 `promptopt verify`](https://github.com/yourusername/promptopt/issues/23)** | 在 held-out test 集上验证 | `promptopt verify <run_id> --split test` |
-| 24 | **[实现 regression detection](https://github.com/yourusername/promptopt/issues/24)** | 检测新候选是否降低关键 slice 指标 | 关键 slice 不得退化 |
-| 25 | **[实现约束检查](https://github.com/yourusername/promptopt/issues/25)** | JSON validity 100%、成本/延迟预算 | 不满足约束的候选自动拒绝 |
-| 26 | **[实现回滚机制](https://github.com/yourusername/promptopt/issues/26)** | 一键回滚到历史 candidate | `promptopt rollback <candidate_id>` |
-| 27 | **[实现 prompt diff review](https://github.com/yourusername/promptopt/issues/27)** | 生成 prompt 变更对比报告 | side-by-side diff 输出 |
-
-### M4 验收标准
-
-- [ ] 新 prompt 不得降低关键 slice
-- [ ] JSON validity 必须 100%
-- [ ] 成本/延迟超预算时告警
-- [ ] 可一键回滚
-
-### M4 成果标志
-
-> **Prompt regression engineering system** - 可防止坏 prompt 上线
-
----
-
-## M5: 集成到开发工作流（Prompt CI）🛠 待开始
-
-### 目标
-
-让它成为团队工程流的一部分。
-
-### 必须完成的 Issues
-
-| # | Issue | 描述 | 验收标准 |
-|---|-------|------|----------|
-| 28 | **[实现非交互式运行模式](https://github.com/yourusername/promptopt/issues/28)** | CLI 支持无人值守运行 | `--quiet --output-json` 输出 |
-| 29 | **[实现 markdown/html 报告生成](https://github.com/yourusername/promptopt/issues/29)** | 生成人类可读的评估报告 | 包含指标、diff、建议 |
-| 30 | **[实现 Git diff 集成](https://github.com/yourusername/promptopt/issues/30)** | 对比 prompt 文件变更 | 能读取 git diff 输出 |
-| 31 | **[实现 CI 退出码规范](https://github.com/yourusername/promptopt/issues/31)** | 失败时返回明确退出码 | 0=成功, 1=评估失败, 2=回归检测到问题 |
-| 32 | **[编写 GitHub Actions 示例](https://github.com/yourusername/promptopt/issues/32)** | 提供 CI 集成模板 | `.github/workflows/promptopt.yml` |
-
-### M5 验收标准
-
-- [ ] 可在 GitHub Actions 中运行
-- [ ] PR 上能看到指标变化、slice 变化
-- [ ] 失败时清晰告警
-
-### M5 成果标志
-
-> **Prompt CI/CD 基础设施** - 可接入团队开发流程
-
----
-
-## M6: 插件化与生态初步成立 🛠 待开始
-
-### 目标
-
-让项目不只服务你自己，而能服务别人。
-
-### 必须完成的 Issues
-
-| # | Issue | 描述 | 验收标准 |
-|---|-------|------|----------|
-| 33 | **[定义 Evaluator 插件接口](https://github.com/yourusername/promptopt/issues/33)** | 第三方可新增 evaluator | 只需实现 `Evaluator` 接口并注册 |
-| 34 | **[定义 Optimizer 插件接口](https://github.com/yourusername/promptopt/issues/34)** | 第三方可新增 optimizer | 只需实现 `Optimizer` 接口并注册 |
-| 35 | **[定义 Model Provider 插件接口](https://github.com/yourusername/promptopt/issues/35)** | 支持新的模型 provider | adapter 模式支持热插拔 |
-| 36 | **[实现 example 模板体系](https://github.com/yourusername/promptopt/issues/36)** | 提供 3+ 个完整 example | JSON extraction, classification, QA |
-| 37 | **[编写插件开发文档](https://github.com/yourusername/promptopt/issues/37)** | 教第三方开发者如何扩展 | 文档包含接口说明和示例 |
-
-### M6 验收标准
-
-- [ ] 第三方可新增 evaluator 而不修改核心代码
-- [ ] 第三方可新增 optimizer 而不修改核心代码
-- [ ] 有 3+ 个可运行的 example
-
-### M6 成果标志
-
-> **开放式 PromptOps 框架** - 可扩展生态
-
----
-
-## M7: 团队协作与可视化平台 🛠 待开始
-
-### 目标
-
-把命令行工具提升为团队级系统。
-
-> **注意**: 这是第 7 阶段，不是第 1 阶段。先做这个，项目必死。
-
-### 必须完成的 Issues
-
-| # | Issue | 描述 | 验收标准 |
-|---|-------|------|----------|
-| 38 | **[实现 Web UI 基础框架](https://github.com/yourusername/promptopt/issues/38)** | 查看 runs / lineage / diff | React/Vue 前端 + FastAPI 后端 |
-| 39 | **[实现 run 对比视图](https://github.com/yourusername/promptopt/issues/39)** | 并排比较两个 run 的结果 | 表格 + 可视化图表 |
-| 40 | **[实现 slice 可视化](https://github.com/yourusername/promptopt/issues/40)** | 按特征分组展示指标 | 支持按长度/领域等分组 |
-| 41 | **[实现 Prompt Registry](https://github.com/yourusername/promptopt/issues/41)** | 团队共享 prompt 库 | 版本控制 + 审批流 |
-| 42 | **[实现候选审批流](https://github.com/yourusername/promptopt/issues/42)** | 候选上线前的审核 | 状态机：draft → review → approved → deployed |
-
-### M7 验收标准
-
-- [ ] 非技术人员能看懂本次改动值不值得用
-- [ ] 能找到历史最佳 prompt
-- [ ] 能查看上线前的验证记录
-
-### M7 成果标志
-
-> **团队级 PromptOps 平台** - 团队协作与可视化
-
----
-
-## 里程碑时间线
-
-```
-Month   Milestone
-0-1     M1: 评估底座可用 [🔨进行中]
-1-2     M2: 失败分析系统可用
-2-4     M3: 候选生成与搜索闭环成立
-4-6     M4: 回归门禁与上线控制
-6-9     M5: 集成到开发工作流（Prompt CI）
-9-12    M6: 插件化与生态初步成立
-12+     M7: 团队协作与可视化平台
+ 全程: localhost 仪表盘实时可看（htmx+SSE）· 检查点可干预 · --headless 全托管
 ```
 
----
-
-## 优先级决策说明
-
-### 为什么 M1 内部 P0 > P1 > P2
-
-1. **数据集加载器** (P0#1) - 没有数据，评估跑不起来
-2. **TaskSpec/Candidate 解析** (P0#2,3) - CLI 依赖配置解析
-3. **评估引擎核心** (P0#4) - 核心中的核心
-4. **eval 命令** (P0#5) - CLI 集成，否则无法使用
-
-### 为什么 mypy/ruff 是 P2
-
-- 不影响功能，但影响代码质量
-- 后续重构成本会随规模增长
-
-### 为什么 M2 在 M3 之前
-
-没有诊断能力，optimizer 就是瞎猜。
-诊断结果才是优化的依据。
+- **预算双模式**：token 用量上限 ∥ 评估次数上限，可组合；耗尽优雅终止输出当前最优。
+- **干预双通道**：Web 检查点（合成集确认 / 候选采纳）+ 本地 artifact 文件直接编辑。
+- **开源门面**：页面即产品脸面——V1 起每个里程碑都有可打开的可视化交付，demo GIF 随里程碑更新进 README。
 
 ---
 
-## Issue 标签规范
+## 理论基础（引用已逐一查证，2026-09-28）
 
-| 标签 | 含义 |
-|------|------|
-| `P0` | 必须完成，否则其他工作无法开展 |
-| `P1` | 重要，本里程碑内必须完成 |
-| `P2` | 次要，可延后到下一里程碑 |
-| `enhancement` | 功能增强 |
-| `bug` | bug 修复 |
-| `docs` | 文档 |
-| `refactor` | 重构 |
-| `test` | 测试 |
+| 机制 | 出处 | 在本平台的角色 |
+|---|---|---|
+| GEPA 反射进化 + Pareto 前沿 | [arXiv:2507.19457](https://arxiv.org/abs/2507.19457)（ICLR 2026 Oral） | V3 引擎核心循环 |
+| p¹ 方差过滤 / 最小辨识集 | [arXiv:2604.08801](https://arxiv.org/abs/2604.08801) | V2 合成评测集提纯 |
+| VISTA 假设解耦 + 重启 + ε-greedy | [arXiv:2603.18388](https://arxiv.org/abs/2603.18388)（ACL SRW 2026） | V3 稳定性防护（防坏种子退化） |
+| ProTeGi 文本梯度 | [arXiv:2305.03495](https://arxiv.org/abs/2305.03495) | V5 范式（定向纠偏） |
+| MIPROv2 指令+Few-shot 联合搜索 | [arXiv:2406.11695](https://arxiv.org/abs/2406.11695) / [2407.21787](https://arxiv.org/abs/2407.21787) | V5 范式（复合搜索） |
+| TextGrad 计算图反向传播 | [arXiv:2406.07496](https://arxiv.org/abs/2406.07496) | 远期范式（多组件流水线） |
+| EvoPrompt / Promptbreeder 进化 | [arXiv:2309.08532](https://arxiv.org/abs/2309.08532) / [2309.16797](https://arxiv.org/abs/2309.16797) | V5 范式（群体搜索） |
+
+> BAPO、TEMPER 两条引用未能核实（arXiv:2305.12524 实为 TheoremQA），已剔除；BO 流以 TextBO [arXiv:2511.12063](https://arxiv.org/abs/2511.12063) 等已验证文献为参考。
+
+**范式路由准则**（远期 V5 产品化）：单模块定向纠偏→ProTeGi；多组件流水线→TextGrad；指令+Few-shot 复合→MIPROv2 风格；生产多维约束→GEPA；预算极紧/测试集大→p¹。
 
 ---
 
-## GitHub Project 看板结构
+## 架构总览
 
 ```
-M1: 评估底座可用
-├── P0
-│   ├── #1 数据集加载器
-│   ├── #2 TaskSpec 解析器
-│   ├── #3 Candidate 解析器
-│   ├── #4 评估引擎核心
-│   └── #5 eval 命令
-├── P1
-│   ├── #6 Run 结果持久化
-│   └── #7 sample-level 结果存储
-└── P2
-    ├── #8 mypy 错误
-    ├── #9 ruff lint
-    └── #10 init 完整逻辑
-
-M2: 失败分析系统可用
-├── #11 错误分类器
-├── #12 Slice Metrics
-├── #13 diagnose 命令
-├── #14 失败样本导出
-└── #15 baseline diff report
-
-M3: 候选生成与搜索闭环
-├── #16 RewriteOptimizer
-├── #17 FewshotOptimizer
-├── #18 ContractOptimizer
-├── #19 optimize 命令
-├── #20 多候选并行评估
-├── #21 select 命令
-└── #22 lineage 追踪
-
-... (M4-M7 待续)
+promptopt/                      # Go module（同仓库原地重写，单二进制）
+├── cmd/promptopt/              # run / serve / resume / inspect
+├── internal/
+│   ├── core/                   # Task, Candidate, Dataset, RunResult, Trace
+│   ├── provider/               # OpenAI-compat 通用 + Anthropic；重试/限流/usage
+│   ├── harness/                # 合成任务规格+数据集+指标；p¹ 方差过滤
+│   ├── eval/                   # 并行评估（goroutine+errgroup）、trace 捕获、指标
+│   ├── engine/                 # Reflector / Mutator / Frontier / Budget / VistaGuard
+│   ├── optimizers/             # Optimizer 接口（多范式可插拔，v1 仅 GEPA）
+│   ├── store/                  # SQLite + artifact 文件
+│   └── web/                    # net/http + htmx 模板 + SSE；go:embed
+└── web/                        # 前端模板与静态资源（嵌入源）
 ```
 
----
-
-## 如何使用本文档
-
-1. **创建 Issue**: 每个 `#N` 都是一个 GitHub Issue
-2. **创建 Project**: 用看板视图管理 Milestone
-3. **优先级排序**: P0 > P1 > P2
-4. **验收标准**: 每个 Issue 的验收标准是 PR merge 的条件
-5. **定期回顾**: 每 2 周检查进度，更新状态
+工程规范：遵守 [JetBrains go-modern-guidelines](https://github.com/JetBrains/go-modern-guidelines)（按 go.mod 版本用现代习语），CI 跑 `go vet` / `staticcheck` / `modernize` / `go test ./...`。标准库优先，SQLite 用纯 Go 驱动（免 cgo）。
 
 ---
 
-*本文档根据用户愿景与项目实际状态制定，每 2 周更新一次。*
+## 里程碑
+
+### V0：地基 🛠
+
+**目标**：Go 项目骨架立起来，Python 体面归档。
+
+- [ ] Go module + `cmd/promptopt` + `internal/` 布局 + config 加载
+- [ ] `Provider` 接口 + OpenAI-compatible 通用实现 + Anthropic 原生实现（重试/限流/usage 统计）
+- [ ] SQLite（纯 Go 驱动）+ artifact 文件读写骨架
+- [ ] CI：vet / staticcheck / modernize / test 全绿
+- [ ] 删除 `src/` `tests/` `pyproject.toml` 等 Python 资产，打 tag `v0.1-python`
+- [ ] AGENTS.md 按 Go 工作流重写
+- [ ] 开源门面：README 重写（v2 定位、badge、快速开始、架构图）+ CONTRIBUTING.md + LICENSE（MIT）确认
+
+**验收**：`go build ./...` 出单二进制；`go test ./...` 绿；Provider mock 测试覆盖重试与 usage 计量。
+
+### V1：评估闭环 🛠
+
+**目标**：测得准、存得全（继承旧 M1 意图，Go 重实现）。
+
+- [ ] core 模型：Task / Candidate / Dataset / RunResult / Trace（structs + YAML/JSON artifact 序列化）
+- [ ] eval 引擎：goroutine+errgroup 并行评估、全量 trace 捕获、指标（exact_match / f1 / json_validator / LLM-judge）
+- [ ] 评估器返回 `(score, diagnosis)`——diagnosis 即 ASI，进反思上下文
+- [ ] run / sample-level 结果持久化；`promptopt run --dataset <file>` 手工数据集最小闭环
+- [ ] **Web 看板骨架页**（前置）：`go:embed` + htmx + SSE，浏览器实时看运行状态与事件流
+- [ ] 录制首个 demo GIF 进 README
+
+**验收**：手工数据集跑通评估并落盘；二次运行结果可查；trace 含输入/输出/评分/诊断；打开 localhost 即见实时事件流。
+
+### V2：Harness Builder + Web UI v0 🛠
+
+**目标**：兑现"输入提示词即可"。
+
+- [ ] Harness Builder：从提示词合成任务规格 + 评测集 + 指标（默认全托管直跑）
+- [ ] p¹ 方差过滤：筛掉死样本与高随机性样本，保留高区分度最小辨识集
+- [ ] 检查点机制：事件总线（SSE 推送）+ 合成集审核页（增删/替换/导入自有数据）
+- [ ] Web 审核页：在 V1 骨架页基础上补齐合成集审核交互
+
+**验收**：`promptopt run "<自然语言提示词>"` 零配置跑通合成→过滤→确认→进入优化队列。
+
+### V3：GEPA 引擎 🛠
+
+**目标**：反思进化闭环成立（v1 算法核心）。
+
+- [ ] Reflector：读 minibatch 全量 trace（ASI）生成自然语言诊断与假设
+- [ ] Mutator：沿假设 + 祖先经验教训突变候选；前沿互补合并
+- [ ] Frontier：per-example 分数矩阵 + 非支配排序
+- [ ] Budget：token 用量 ∥ 评估次数双阀门，context 传递，耗尽优雅终止
+- [ ] VistaGuard：假设生成与重写解耦、语义标注假设并行验证、随机重启、ε-greedy
+- [ ] 候选 lineage + 解释性报告（优化轨迹、预算消耗、最终前沿）
+
+**验收**：坏种子场景有防护且留事件记录；预算耗尽输出当前最优而非空手而归；lineage 全程可追溯。
+
+### V4：Web UI 完整化 🛠
+
+**目标**：干预体验成型（吸收旧 M7 的高价值部分，提前到此）。
+
+- [ ] Pareto 前沿看板（候选对比、支配关系、per-example 热力）
+- [ ] 预算仪表（token/评估次数实时消耗）
+- [ ] trace 浏览器 + 候选 diff（side-by-side）+ run 对比
+- [ ] 检查点干预完整化（候选采纳/拒绝、合成集修订）
+- [ ] markdown / html 报告导出
+
+**验收**：不看终端即可完成一次"输入提示词→审数据→盯优化→采纳候选"全流程。
+
+### V5：多范式扩展 🛠
+
+**目标**：从单引擎到平台（Optimizer 接口兑现）。
+
+- [ ] Optimizer 插件接口固化（注册、能力声明、路由元数据）
+- [ ] ProTeGi 风格（文本梯度定向纠偏）
+- [ ] MIPROv2 风格（指令+Few-shot 联合搜索）
+- [ ] EvoPrompt 风格（GA/DE 群体搜索）
+- [ ] 范式路由器：按任务特征（单模块/复合/多维约束/预算紧张）选型
+- [ ] 插件开发文档 + examples 体系（≥3 个完整示例）
+
+**验收**：同一任务可声明使用不同范式并对比结果；第三方可实现新 Optimizer 而不改核心。
+
+### V6：工程化与回归门禁 🛠
+
+**目标**：进 CI、防退化（吸收旧 M4/M5）。
+
+- [ ] `--headless` 无头模式 + JSON 输出 + 退出码规范（0=成功 / 1=评估失败 / 2=预算耗尽 / 3=回归）
+- [ ] verify：held-out 保留集验证（防合成集自证循环的最终闸门）
+- [ ] regression detection + 约束检查（JSON validity 100% / 成本 / 延迟）
+- [ ] rollback（tag + artifact 天然支持一键回退）
+- [ ] GitHub Actions 集成模板
+- [ ] Release 规范：goreleaser 多平台单二进制产物 + changelog + README 的 GIF/截图随版本更新
+
+**验收**：PR 上可自动跑优化对比；新提示词不得在关键指标/约束上退化。
+
+---
+
+## 明确不做（v2 范围外）
+
+多用户/云部署/SaaS、模型微调与 RL 训练类优化（RLPrompt 流派）、多轮对话 agent 与 RAG 全链路优化、MCTS 类搜索（无核实文献）、第三方插件市场、MLflow/Opik 等外部生态集成。
+
+---
+
+## 决策记录（2026-09-28，详见 PRD-0000）
+
+| # | 决策点 | 结论 |
+|---|---|---|
+| 1 | 评测数据来源 | AI 合成 + 可干预（p¹ 过滤 + 检查点） |
+| 2 | 范式范围 | v1 = GEPA+p¹ 核心；接口多范式，实现分期 |
+| 3 | 技术栈 | Go 同仓库原地重写；Python 删除 + tag 留档 |
+| 4 | 交互形态 | Web UI 优先（单二进制内嵌）+ CLI 无头模式 |
+| 5 | 前端 | htmx + 模板 + SSE |
+| 6 | Provider | OpenAI-compatible 通用 + Anthropic 原生 |
+| 7 | 旧遗留 | 45 issue 批量关闭，能力按 V0–V6 重拆 |
+| 8 | 页面与开源（2026-09-28 追加） | V1 前置看板骨架页 + UI 门面化；V0 开源配套 / V6 Release 规范；前端维持 htmx |
+
+---
+
+## 与旧路线的承接关系
+
+| 旧里程碑（Python） | 新去向 |
+|---|---|
+| M1 评估底座 | V1 |
+| M2 失败分析 | V3（反思 trace）+ V4（视图） |
+| M3 候选搜索 | V3（GEPA）+ V5（其余范式） |
+| M4 回归门禁 | V6 |
+| M5 Prompt CI | V6 |
+| M6 插件化 | V5 |
+| M7 Web 平台 | V2（v0）+ V4（完整化） |
+
+---
+
+*下一步：`/grill` 挑战 PRD-0000 → `/story` 按里程碑拆解 Issue → 实现工作流落地。*

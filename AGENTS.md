@@ -1,5 +1,7 @@
 # PromptOpt 开发指南
 
+> ⚠️ **v2 转向中（2026-09-28）**：项目已立项 v2 —— GEPA 反射进化 + 多范式提示词优化平台，**Go 同仓库原地重写**。本文件下述 Python/uv 工作流仅适用于归档的 v1 代码（tag `v0.1-python`），V0 落地时将按 Go 工作流重写本文件。新路线见 [ROADMAP.md](ROADMAP.md) 与 [PRD-0000](docs/prd/PRD-0000-promptopt-v2-gepa-go-rewrite.md)（父 Issue #49）。Go 实现须遵守 [JetBrains go-modern-guidelines](https://github.com/JetBrains/go-modern-guidelines)。
+
 ## 基本原则
 
 1. **第一性原理**: 所有结论必须基于严密的证据或可信的信源，不编造、不臆测
@@ -106,3 +108,25 @@ class CandidateMetadata(BaseModel):
 1. **datetime 序列化**: `Candidate.model_dump()` 已处理 datetime 序列化，继承时需注意
 2. **pydantic ValidationError**: 使用 `pytest.raises(ValidationError)` 捕获验证错误
 3. **异步测试**: 确保 `pytest.ini_options` 中 `asyncio_mode = "auto"`
+
+## Agent skills
+
+### Working principles
+
+Apply first-principles reasoning to engineering work. Establish WHAT before determining HOW. Verify material facts before relying on them: inspect the actual code and relevant files, run the relevant commands or tests, and do not infer behavior beyond the available evidence. When verification is impossible, state the gap explicitly as an assumption; treat unstated goals and constraints the same way. Analogy is not evidence. Decompose a problem only until further decomposition can no longer change the next action. Trace every material conclusion to a fact, constraint, goal, or explicit assumption. Prefer the simplest solution that satisfies all real constraints and can be verified. Treat existing code and conventions as evidence about the system, not as unquestionable authority: understand why an existing solution works before extending, replacing, or reusing it; follow established conventions by default, and deviate only with a stated reason.
+
+### Issue tracker
+
+Issues live in GitHub Issues (this repo), operated via `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical triage roles with default label strings (needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` at repo root (lazy), `docs/prd/`, `docs/adr/`, `docs/research/`. See `docs/agents/domain.md`.
+
+### Documentation language
+
+All skill-produced human-facing prose (PRDs, ADRs, CONTEXT.md, issues, comments) is written in Chinese. See `docs/agents/language.md`.
