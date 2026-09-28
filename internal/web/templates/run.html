@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>run {{.ID}} · PromptOpt</title>
+<link rel="icon" href="data:,">
+<style>
+ :root{--fg:#1f2328;--dim:#6e7781;--line:#d8dee4;--bg:#f6f8fa;--card:#fff;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700}
+ *{box-sizing:border-box}
+ body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;margin:0;padding:2rem 1.25rem;background:var(--bg);color:var(--fg);line-height:1.5}
+ main{max-width:60rem;margin:0 auto}
+ h1{font-size:1.25rem;margin:0 0 .25rem}
+ h2{font-size:1rem;margin:2rem 0 .75rem}
+ .sub{color:var(--dim);font-size:.85rem;margin:0 0 1rem}
+ .badge{display:inline-block;padding:.05rem .55rem;border-radius:1rem;font-size:.75rem;color:#fff;background:var(--dim);vertical-align:.15rem;margin-right:.4rem}
+ .badge.ok{background:var(--ok)}.badge.bad{background:var(--bad)}.badge.warn{background:var(--warn)}
+ a{color:#0969da;text-decoration:none}
+ a:hover{text-decoration:underline}
+ table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:.5rem;font-size:.85rem;overflow:hidden}
+ th,td{padding:.4rem .7rem;border-top:1px solid var(--line);text-align:left;vertical-align:top}
+ thead th{border-top:none;color:var(--dim);font-weight:500;white-space:nowrap}
+ table.kv th{width:10rem;white-space:nowrap}
+ .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+ .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.dim{color:var(--dim)}
+ details{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:.5rem .9rem;margin:.5rem 0}
+ summary{cursor:pointer;font-size:.85rem}
+ dt{color:var(--dim);font-size:.75rem;margin-top:.55rem}
+ dd{margin:0}
+ pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:.4rem;padding:.5rem .7rem;font-size:.78rem;max-height:20rem;overflow:auto;margin:.25rem 0 0}
+ button{font:inherit;padding:.3rem 1rem;border:1px solid var(--line);border-radius:.4rem;background:var(--card);cursor:pointer}
+ button:hover{background:var(--bg)}
+ #replay-log{font-size:.78rem;max-height:24rem;overflow:auto;margin-top:.75rem}
+ #replay-log li{margin:.15rem 0}
+ .empty{color:var(--dim);padding:1.25rem;text-align:center;border:1px dashed var(--line);border-radius:.5rem;background:var(--card)}
+</style>
+</head>
+<body data-run-id="{{.ID}}">
+<main>
+<h1><span class="badge {{.StatusClass}}">{{.Status}}</span><span class="mono">{{.ID}}</span></h1>
+<p class="sub"><a href="/">← 返回 run 列表</a></p>
+
+<h2>run 摘要</h2>
+{{if .HasSummary}}
+<table class="kv">
+  <tr><th>任务 · 候选 · 数据集</th><td>{{.Task}} · {{.Candidate}} · {{.Dataset}}{{if .Split}}（split={{.Split}}）{{end}}</td></tr>
+  <tr><th>状态</th><td><span class="{{.StatusClass}}">{{.Status}}</span>（exit {{.ExitCode}}）</td></tr>
+  <tr><th>样本</th><td>评估 {{.Evaluated}}/{{.Total}} · 失败 {{.Failed}} · 未派发 {{.Undispatched}}</td></tr>
+  {{if .Metrics}}<tr><th>指标均值</th><td class="mono">{{range .Metrics}}{{.Name}}={{.Value}}　{{end}}</td></tr>{{end}}
+  {{if .Usage}}<tr><th>token 用量</th><td class="mono">{{range .Usage}}{{.}}　{{end}}</td></tr>{{end}}
+  {{if .FailedSamples}}<tr><th>失败样本</th><td class="bad mono">{{range .FailedSamples}}{{.}} {{end}}</td></tr>{{end}}
+  <tr><th>时间</th><td>{{.Started}} → {{.Finished}}</td></tr>
+</table>
+{{else}}
+<div class="empty">该 run 尚未产出 summary.json（未完成或被中断），以下为已落盘的样本 trace。</div>
+{{end}}
+
+{{if .Samples}}
+<h2>样本结果</h2>
+<table>
+  <thead><tr><th>样本</th><th>状态</th><th>得分</th><th>tokens</th><th>耗时</th></tr></thead>
+  <tbody>
+  {{range .Samples}}
+    <tr>
+      <td class="mono">{{.ID}}</td>
+      <td class="{{.StatusClass}}">{{.Status}}</td>
+      <td class="mono">{{range .Scores}}{{.Name}}={{.Value}} {{end}}</td>
+      <td class="mono">{{.Tokens}}</td>
+      <td class="mono">{{.Latency}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+
+<h2>样本 trace</h2>
+{{range .Samples}}
+<details>
+  <summary><span class="mono">{{.ID}}</span>{{if .Error}} <span class="bad">失败：{{.Error}}</span>{{end}}</summary>
+  <dl>
+    <dt>prompt</dt><dd><pre>{{.Prompt}}</pre></dd>
+    {{if .Reasoning}}<dt>reasoning</dt><dd><pre>{{.Reasoning}}</pre></dd>{{end}}
+    <dt>response</dt><dd><pre>{{.Response}}</pre></dd>
+    {{if .Diagnosis}}<dt>诊断</dt><dd>{{range .Diagnosis}}<div><span class="mono">{{.Name}}</span>：{{.Value}}</div>{{end}}</dd>{{end}}
+  </dl>
+</details>
+{{end}}
+{{else if .HasSummary}}
+<div class="empty">无样本 trace（样本均未派发）</div>
+{{end}}
+
+<h2>事件流回放</h2>
+<p class="sub">从 events.jsonl 逐条回放该 run 的评估事件（请求/响应摘要与 usage）。</p>
+<button id="replay-btn" type="button">回放事件流</button>
+<ol id="replay-log" class="mono"></ol>
+</main>
+<script>
+function fmtScores(sc){
+  if (!sc) return '';
+  return Object.keys(sc).sort().map(k => k + '=' + Number(sc[k]).toFixed(2)).join(' ');
+}
+document.getElementById('replay-btn').addEventListener('click', () => {
+  const log = document.getElementById('replay-log');
+  const btn = document.getElementById('replay-btn');
+  log.replaceChildren();
+  btn.disabled = true;
+  btn.textContent = '回放中…';
+  const es = new EventSource('/runs/' + document.body.dataset.runId + '/events');
+  es.onmessage = e => {
+    const ev = JSON.parse(e.data);
+    const parts = [new Date(ev.time).toLocaleTimeString(), ev.type];
+    if (ev.sample_id) parts.push(ev.sample_id);
+    if (ev.scores) parts.push(fmtScores(ev.scores));
+    if (ev.error) parts.push(ev.error.slice(0, 80));
+    const li = document.createElement('li');
+    li.textContent = parts.join(' · ');
+    log.appendChild(li);
+    if (log.children.length > 1000) log.removeChild(log.firstChild);
+  };
+  es.onerror = () => {
+    es.close();
+    btn.disabled = false;
+    btn.textContent = '重新回放';
+  };
+});
+</script>
+</body>
+</html>

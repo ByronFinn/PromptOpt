@@ -1,0 +1,15 @@
+# v2 任务规范：中医医疗命名实体抽取
+name: tcm_ner_extraction
+description: 从中文中医医疗文本中抽取命名实体（证候、治法、方剂、中药），输出结构化 JSON。
+
+prompt_template: |
+  你是中医医疗信息抽取助手。请阅读下面的文本，抽取其中出现的中医命名实体，
+  实体类型限定为四类：证候、治法、方剂、中药。
+  严格按以下 JSON 格式输出，除 JSON 外不要输出任何其他内容：
+  {"entities": [{"type": "证候|治法|方剂|中药", "text": "原文中的实体"}]}
+
+  文本：
+  {input}
+
+metrics: [json_validator, f1]
+primary_metric: f1

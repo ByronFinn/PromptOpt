@@ -1,0 +1,46 @@
+# v2 数据集：内联 3 条中文中医医疗 NER 样本（train/dev/test 各 1 条）
+# expected 为结构化 JSON 对象，与 candidate 的输出契约一致
+name: tcm_ner
+
+samples:
+  - id: train-001
+    input: |
+      患者男性，32岁。恶寒发热，无汗，头痛身疼，鼻塞流清涕，舌苔薄白，脉浮紧。
+      四诊合参，证属风寒束表，治以辛温解表，方用荆防败毒散加减。
+    expected:
+      entities:
+        - {type: 证候, text: 风寒束表}
+        - {type: 治法, text: 辛温解表}
+        - {type: 方剂, text: 荆防败毒散}
+    split: train
+
+  - id: dev-001
+    input: |
+      患者女性，28岁。发热微恶风寒，汗出头痛，咽痛口渴，咳嗽痰黄，
+      舌边尖红，苔薄黄，脉浮数。证属风热犯表，治宜辛凉解表、清热解毒，
+      方选银翘散，药用金银花、连翘、薄荷、桔梗、生甘草。
+    expected:
+      entities:
+        - {type: 证候, text: 风热犯表}
+        - {type: 治法, text: 辛凉解表}
+        - {type: 治法, text: 清热解毒}
+        - {type: 方剂, text: 银翘散}
+        - {type: 中药, text: 金银花}
+        - {type: 中药, text: 连翘}
+        - {type: 中药, text: 薄荷}
+        - {type: 中药, text: 桔梗}
+        - {type: 中药, text: 生甘草}
+    split: dev
+
+  - id: test-001
+    input: |
+      失眠多梦，心烦不寐，腰膝酸软，五心烦热，舌红少苔，脉细数。
+      此乃心肾不交之证，治以交通心肾，方用交泰丸，药用黄连、肉桂。
+    expected:
+      entities:
+        - {type: 证候, text: 心肾不交}
+        - {type: 治法, text: 交通心肾}
+        - {type: 方剂, text: 交泰丸}
+        - {type: 中药, text: 黄连}
+        - {type: 中药, text: 肉桂}
+    split: test

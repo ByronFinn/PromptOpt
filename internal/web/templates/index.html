@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PromptOpt 看板</title>
+<link rel="icon" href="data:,">
+<style>
+ :root{--fg:#1f2328;--dim:#6e7781;--line:#d8dee4;--bg:#f6f8fa;--card:#fff;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700}
+ *{box-sizing:border-box}
+ body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;margin:0;padding:2rem 1.25rem;background:var(--bg);color:var(--fg);line-height:1.5}
+ main{max-width:60rem;margin:0 auto}
+ h1{font-size:1.25rem;margin:0 0 .25rem}
+ h2{font-size:1rem;margin:2rem 0 .75rem}
+ .sub{color:var(--dim);font-size:.85rem;margin:0 0 1rem}
+ .badge{display:inline-block;padding:.05rem .55rem;border-radius:1rem;font-size:.75rem;color:#fff;background:var(--dim);vertical-align:.05rem}
+ .badge.ok{background:var(--ok)}.badge.bad{background:var(--bad)}.badge.warn{background:var(--warn)}
+ .cards{display:grid;gap:.75rem}
+ .card{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:.85rem 1rem}
+ .card .id{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem}
+ .card .meta{color:var(--dim);font-size:.8rem;margin-top:.3rem}
+ .metrics{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.8rem;margin-top:.3rem}
+ a{color:#0969da;text-decoration:none}
+ a:hover{text-decoration:underline}
+ table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:.5rem;font-size:.85rem;overflow:hidden}
+ th,td{padding:.4rem .7rem;border-top:1px solid var(--line);text-align:left;vertical-align:top}
+ thead th{border-top:none;color:var(--dim);font-weight:500;white-space:nowrap}
+ .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+ .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.dim{color:var(--dim)}
+ #live-status{margin:.25rem 0 .6rem;font-size:.9rem}
+ #budget{color:var(--warn);margin:.25rem 0 .6rem;font-size:.85rem}
+ .empty{color:var(--dim);padding:1.25rem;text-align:center;border:1px dashed var(--line);border-radius:.5rem;background:var(--card)}
+</style>
+</head>
+<body>
+<main>
+<h1>PromptOpt 看板</h1>
+<p class="sub">{{if .Live}}实时评估模式：评估进行中，事件流如下{{else}}历史 run 浏览{{end}}</p>
+
+{{if .Live}}
+<section id="live">
+  <h2>实时事件流</h2>
+  <div id="live-status" class="dim">等待事件…</div>
+  <div id="budget" hidden></div>
+  <table>
+    <thead><tr><th>样本</th><th>状态</th><th>得分</th><th>tokens</th><th>耗时</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</section>
+{{end}}
+
+<h2>历史 run</h2>
+{{if .Runs}}
+<div class="cards">
+{{range .Runs}}
+  <div class="card">
+    <div><span class="badge {{.StatusClass}}">{{.Status}}</span> <a class="id" href="/runs/{{.ID}}">{{.ID}}</a></div>
+    {{if .HasSummary}}
+    <div class="meta">{{.Task}} · {{.Candidate}} · {{.Dataset}}{{if .Split}} · split={{.Split}}{{end}} · {{.Started}}</div>
+    <div class="meta">样本 {{.Evaluated}}/{{.Total}} · 失败 {{.Failed}} · 未派发 {{.Undispatched}} · exit {{.ExitCode}}</div>
+    {{if .Metrics}}<div class="metrics">{{range .Metrics}}{{.Name}}={{.Value}} {{end}}</div>{{end}}
+    {{else}}
+    <div class="meta">尚未产出 summary.json</div>
+    {{end}}
+  </div>
+{{end}}
+</div>
+{{else}}
+<div class="empty">暂无历史 run</div>
+{{end}}
+</main>
+
+{{if .Live}}
+<script>
+const rows = {};
+function row(id){
+  let tr = rows[id];
+  if (!tr) {
+    tr = document.createElement('tr');
+    tr.innerHTML = '<td class="mono"></td><td class="dim">评估中…</td><td></td><td></td><td></td>';
+    tr.children[0].textContent = id;
+    rows[id] = tr;
+    document.getElementById('rows').appendChild(tr);
+  }
+  return tr;
+}
+function fmtScores(sc){
+  if (!sc) return '';
+  return Object.keys(sc).sort().map(k => k + '=' + Number(sc[k]).toFixed(4)).join(' ');
+}
+let totalTokens = 0;
+const statusEl = document.getElementById('live-status');
+const budgetEl = document.getElementById('budget');
+const es = new EventSource('/events');
+es.onmessage = e => {
+  const ev = JSON.parse(e.data);
+  if (ev.type === 'run_start') {
+    statusEl.className = 'dim';
+    statusEl.textContent = 'run ' + ev.run_id + ' 进行中';
+  } else if (ev.type === 'sample_start') {
+    row(ev.sample_id);
+  } else if (ev.type === 'sample_done') {
+    const tr = row(ev.sample_id);
+    if (ev.error) {
+      tr.children[1].textContent = '失败';
+      tr.children[1].className = 'bad';
+      tr.children[2].textContent = ev.error.slice(0, 90);
+    } else {
+      tr.children[1].textContent = '完成';
+      tr.children[1].className = 'ok';
+      tr.children[2].textContent = fmtScores(ev.scores);
+      if (ev.usage) {
+        totalTokens += ev.usage.prompt_tokens + ev.usage.completion_tokens;
+        tr.children[3].textContent = ev.usage.prompt_tokens + '+' + ev.usage.completion_tokens;
+      }
+    }
+    if (ev.latency_ms) tr.children[4].textContent = (ev.latency_ms / 1000).toFixed(1) + 's';
+    statusEl.textContent = 'run ' + ev.run_id + ' · 累计 tokens ' + totalTokens;
+  } else if (ev.type === 'budget_stop') {
+    budgetEl.hidden = false;
+    budgetEl.textContent = '预算已触顶：停止派发新样本，在跑样本继续完成';
+  } else if (ev.type === 'run_done') {
+    statusEl.className = ev.status === 'completed' ? 'ok' : (ev.status === 'failed' ? 'bad' : 'warn');
+    statusEl.textContent = 'run ' + ev.run_id + ' — ' + ev.status + '（exit ' + ev.exit_code + '）· 未派发 ' + ev.undispatched;
+    es.close();
+  }
+};
+</script>
+{{end}}
+</body>
+</html>

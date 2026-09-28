@@ -1,0 +1,12 @@
+# v2 候选提示词：基线（直接指令 + JSON 输出契约）
+id: baseline
+name: baseline
+description: 基线候选：直接指令加 JSON 输出契约，不含 few-shot 示例。
+
+prompt: |
+  请从下面的中医医疗文本中抽取命名实体（证候、治法、方剂、中药），
+  只输出 JSON，不要输出任何其他内容，格式：
+  {"entities": [{"type": "...", "text": "..."}]}
+
+  文本：
+  {input}
