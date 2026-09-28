@@ -26,6 +26,15 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Modernize (go-modern-guidelines)
+        run: |
+          output=$(go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -test ./... 2>&1 | grep -v '^go: downloading' || true)
+          echo "$output"
+          if [ -n "$output" ]; then
+            echo "::error::modernize found non-modern idioms (see log above)"
+            exit 1
+          fi
+
       - name: Test
         run: go test -race ./...
 

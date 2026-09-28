@@ -4,6 +4,7 @@ package provider
 
 import (
 	"context"
+	"maps"
 	"sync"
 
 	"github.com/ByronFinn/PromptOpt/internal/core"
@@ -64,8 +65,6 @@ func (m *Meter) Snapshot() map[core.Role]core.Usage {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make(map[core.Role]core.Usage, len(m.byRole))
-	for r, u := range m.byRole {
-		out[r] = u
-	}
+	maps.Copy(out, m.byRole)
 	return out
 }

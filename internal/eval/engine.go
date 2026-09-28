@@ -132,13 +132,11 @@ func (e *Engine) Run(ctx context.Context, cand core.Candidate, samples []core.Sa
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	for range max(e.Workers, 1) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for idx := range jobs {
 				outcomes[idx] = e.evaluate(ctx, role, cand, samples[idx], &callSeq, notifyStop)
 			}
-		}()
+		})
 	}
 
 	// Dispatch: the budget precheck runs before a sample enters the

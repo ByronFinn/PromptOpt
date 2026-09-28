@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"maps"
 	"sync"
 
 	"github.com/ByronFinn/PromptOpt/internal/core"
@@ -74,8 +75,6 @@ func (b *Budget) Snapshot() (evals int64, usage map[core.Role]core.Usage) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	out := make(map[core.Role]core.Usage, len(b.usage))
-	for r, u := range b.usage {
-		out[r] = u
-	}
+	maps.Copy(out, b.usage)
 	return b.evals, out
 }

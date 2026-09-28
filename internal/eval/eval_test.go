@@ -167,13 +167,11 @@ func TestBudgetConcurrentAccounting(t *testing.T) {
 	var wg sync.WaitGroup
 	acquired := make(chan struct{}, 200)
 	for range 200 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if b.TryAcquireEval() {
 				acquired <- struct{}{}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(acquired)
@@ -184,11 +182,9 @@ func TestBudgetConcurrentAccounting(t *testing.T) {
 
 	var wgr sync.WaitGroup
 	for range 100 {
-		wgr.Add(1)
-		go func() {
-			defer wgr.Done()
+		wgr.Go(func() {
 			b.RecordUsage(core.RoleExecutor, core.Usage{PromptTokens: 1, CompletionTokens: 2})
-		}()
+		})
 	}
 	wgr.Wait()
 	_, usage := b.Snapshot()

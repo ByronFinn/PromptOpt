@@ -499,7 +499,7 @@ func waitFor(t *testing.T, cond func() bool) {
 // dataLines extracts the data: payloads from an SSE response body.
 func dataLines(body string) []string {
 	var out []string
-	for _, l := range strings.Split(body, "\n") {
+	for l := range strings.SplitSeq(body, "\n") {
 		if d, ok := strings.CutPrefix(l, "data: "); ok {
 			out = append(out, d)
 		}

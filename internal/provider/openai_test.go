@@ -254,15 +254,13 @@ func TestMeterIsConcurrencySafe(t *testing.T) {
 	c, _ := newTestClient(t, srv.URL, OpenAIConfig{})
 	var wg sync.WaitGroup
 	for range 25 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 4 {
 				if _, err := c.Chat(context.Background(), ChatRequest{Role: core.RoleExecutor}); err != nil {
 					t.Errorf("Chat: %v", err)
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	u := c.UsageSnapshot()[core.RoleExecutor]
