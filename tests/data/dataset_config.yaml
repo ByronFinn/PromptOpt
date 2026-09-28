@@ -1,3 +1,0 @@
-name: test_dataset
-path: dataset.json
-split_field: split

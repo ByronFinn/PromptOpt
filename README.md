@@ -1,319 +1,114 @@
 # PromptOpt
 
-**一个面向结构化 LLM 任务的、评估驱动（eval-driven）的 Prompt 搜索与回归测试框架。**
+[![CI](https://github.com/ByronFinn/PromptOpt/actions/workflows/ci.yml/badge.svg)](https://github.com/ByronFinn/PromptOpt/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ByronFinn/PromptOpt.svg)](https://pkg.go.dev/github.com/ByronFinn/PromptOpt)
+[![Go Report Card](https://goreportcard.com/badge/github.com/ByronFinn/PromptOpt)](https://goreportcard.com/report/github.com/ByronFinn/PromptOpt)
+[![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
 
----
+**输入提示词，输出最优提示词——开源的多范式提示词优化平台。**
 
-## 项目简介
-
-PromptOpt 用于解决一个实际存在的问题：
-
-> **Prompt 调优目前仍然是“手工试错”，不可复现、不可对比、不可回滚。**
-
-典型流程是：
+PromptOpt 把提示词调优从"手工试错"变成预算受控、可干预、可托管的自动化流程：
 
 ```text
-写 prompt → 跑评估 → 看错误 → 让更强模型帮改 → 再试
+你的提示词
+    ↓
+① Harness Builder   AI 合成任务规格 + 评测集 + 指标（p¹ 方差过滤提纯）
+② 优化引擎           GEPA 反射进化 + Pareto 前沿，预算阀门控制
+③ 输出               最优提示词 + lineage + 解释性报告
+
+全程：localhost 仪表盘实时可看（htmx + SSE）· 检查点可干预 · --headless 全托管
 ```
 
-这个流程的问题：
+- **预算受控**：token 用量 ∥ 评估次数双上限，耗尽优雅终止并输出当前最优
+- **可干预**：Web 仪表盘实时查看运行状态与事件流，检查点处可审核合成评测集、采纳候选
+- **可托管**：`--headless` 无头模式 + JSON 输出 + 规范退出码（`0` 成功 / `1` 评估失败 / `2` 预算耗尽）
 
-* ❌ 没有版本管理（不知道哪个 prompt 更好）
-* ❌ 不可复现（每次结果都漂）
-* ❌ 只看总分，不知道错在哪
-* ❌ 很容易“修 A 坏 B”
-* ❌ 无法做回归测试
-* ❌ 无法比较不同优化策略
-
----
-
-## PromptOpt 做了什么
-
-PromptOpt 将 prompt 调优变成一个**工程化系统**：
-
-```text
-baseline prompt
-    ↓
-评估（eval）
-    ↓
-失败分析（diagnose）
-    ↓
-生成多个候选 prompt（search）
-    ↓
-批量评估
-    ↓
-选择（selection）
-    ↓
-测试集验证（regression gate）
-```
-
-核心变化：
-
-> ❌ 单路径试错
-> ✅ 多候选搜索 + 评估驱动选择
-
----
-
-## 核心能力
-
-### 1️⃣ 评估驱动（Eval-first）
-
-* 支持多种指标：
-
-  * exact match
-  * F1 / macro-F1
-  * JSON 合法性
-* 支持自定义 evaluator
-* 支持 LLM-as-judge（可选）
-
----
-
-### 2️⃣ 失败分析（Diagnostics）
-
-不仅告诉你“差”，还告诉你：
-
-> **差在哪**
-
-支持：
-
-* 样本级错误分析
-* slice 分析（例如：
-
-  * 否定句
-  * 家族史
-  * 数值型信息
-    ）
-* 失败模式归因
-
----
-
-### 3️⃣ 多候选搜索（Search）
-
-不是只改一个 prompt，而是生成多个候选：
-
-* instruction rewrite
-* few-shot 替换/增强
-* 输出约束强化（JSON contract）
-
-然后：
-
-👉 **批量评估 → 选择最优**
-
----
-
-### 4️⃣ Prompt 版本与血缘（Lineage）
-
-每个 prompt 都是一个版本化对象：
-
-* 父子关系（谁改出来的）
-* 修改方式（rewrite / few-shot 等）
-* 性能变化
-* prompt diff
-
----
-
-### 5️⃣ 回归测试（Regression Gate）
-
-防止“越优化越坏”：
-
-* dev / test 分离
-* 必须通过 test 才能选用
-* 支持约束：
-
-  * JSON 必须合法
-  * 成本限制
-  * 延迟限制
-
----
-
-### 6️⃣ 支持本地模型（重点）
-
-真实使用场景：
-
-* 用 GPT / DeepSeek 作为 **优化器（teacher）**
-* 用本地模型（Qwen / LLaMA）作为 **执行器（target）**
-
-支持：
-
-* OpenAI-compatible API
-* vLLM
-* Ollama
-
----
-
-## 适用场景
-
-PromptOpt **不是万能工具**，最适合：
-
-### ✅ 结构化任务
-
-* JSON 抽取
-* 医疗信息抽取
-* 表单解析
-
-### ✅ 分类任务
-
-* 标签分类
-* 意图识别
-
-### ✅ 强约束生成
-
-* schema 约束输出
-* 固定格式生成
-
----
-
-## 不适合的场景
-
-* ❌ 多轮对话 agent
-* ❌ RAG 全链路优化
-* ❌ 自主 AI 系统
-* ❌ 模型训练 / 微调
-
----
+完整路线与理论基础见 [ROADMAP.md](ROADMAP.md)，设计决策见 [PRD-0000](docs/prd/PRD-0000-promptopt-v2-gepa-go-rewrite.md) 与 [ADR](docs/adr/)。
 
 ## 快速开始
 
-### 1. 初始化项目
+环境要求：Go 1.26+。
+
+### 安装
 
 ```bash
-promptopt init examples/json_extraction
+# 方式一：go install（仓库发布 release tag 后可用）
+go install github.com/ByronFinn/PromptOpt/cmd/promptopt@latest
+
+# 方式二：源码构建（当前推荐）
+git clone https://github.com/ByronFinn/PromptOpt.git
+cd PromptOpt
+go build -o promptopt ./cmd/promptopt
 ```
 
----
+### 运行评估
 
-### 2. 跑 baseline
+以 [examples/json_extraction](examples/json_extraction/)（中医医疗 NER 抽取）为例：
 
 ```bash
-promptopt eval \
-  --task tasks/task.yaml \
-  --candidate candidates/baseline.yaml \
-  --dataset datasets/dataset.yaml \
-  --split dev
+export PROMPTOPT_BASE_URL=http://localhost:11434/v1   # 任意 OpenAI 兼容端点：vLLM / Ollama / 网关
+export PROMPTOPT_MODEL=qwen2.5
+
+cd examples/json_extraction
+promptopt run \
+  --task task.yaml \
+  --candidate candidate.yaml \
+  --dataset dataset.yaml \
+  --web
 ```
 
----
+加 `--web` 后浏览器打开 <http://127.0.0.1:17700> 实时查看事件流；退出码与指标汇总见终端输出。
 
-### 3. 失败分析
-
-```bash
-promptopt diagnose runs/run_001
-```
-
----
-
-### 4. 生成候选 prompt
-
-```bash
-promptopt optimize runs/run_001 \
-  --teacher openai:gpt-5 \
-  --strategies rewrite,fewshot,contract \
-  --num-candidates 12
-```
-
----
-
-### 5. 批量评估
-
-```bash
-promptopt search candidates/ \
-  --task tasks/task.yaml \
-  --dataset datasets/dataset.yaml \
-  --split dev
-```
-
----
-
-### 6. 选择最优
-
-```bash
-promptopt select runs/run_002 \
-  --primary macro_f1 \
-  --constraints json_validity=1.0 \
-  --secondary cost,latency
-```
-
----
-
-### 7. 测试集验证
-
-```bash
-promptopt verify runs/run_002 --split test
-```
-
----
-
-## 项目结构
+产物落在 `runs/<run_id>/`：
 
 ```text
-promptopt/
-├─ core/          # task / candidate / run / lineage
-├─ evaluators/    # 评估指标
-├─ optimizers/    # prompt 生成策略
-├─ diagnostics/   # 失败分析
-├─ models/        # 模型适配
-├─ cli/           # 命令行
-├─ storage/       # 实验数据
+runs/<run_id>/
+├── manifest.json        # 运行配置快照（复现依据）
+├── events.jsonl         # 事件流，SSE 回放源
+├── samples/<id>.json    # 逐样本 trace：渲染后 prompt、响应、得分、用量
+└── summary.json         # 运行摘要：状态、退出码、指标均值、用量
 ```
 
----
+### 浏览历史运行
 
-## 与现有方案的区别
+```bash
+promptopt serve    # http://127.0.0.1:17700 查看 run 摘要、样本 trace 与事件回放（只读）
+```
 
-| 方案              | 特点                      | 问题      |
-| --------------- | ----------------------- | ------- |
-| 手工调 prompt      | 简单直接                    | 不可复现    |
-| 自动改 prompt      | 单路径优化                   | 容易退化    |
-| DSPy / TextGrad | 偏研究/程序优化                | 不强调工程回归 |
-| **PromptOpt**   | eval + search + lineage | 专注结构化任务 |
+## 架构一览
 
----
+Go 单二进制，标准库优先：
 
-## 设计原则
+```text
+PromptOpt/
+├── cmd/promptopt/        # CLI 入口：run / serve / version
+├── internal/
+│   ├── core/             # Task / Candidate / Dataset / RunResult 核心模型与 YAML 加载
+│   ├── config/           # flag 默认值与 PROMPTOPT_* 环境变量解析
+│   ├── provider/         # OpenAI 兼容 Provider：重试、usage 统计
+│   ├── eval/             # 并行评估引擎：worker 池、exact_match / f1 / json_validator、预算阀门
+│   └── web/              # 内嵌 Web 看板：run 列表 / 详情、SSE 实时事件流（go:embed 模板）
+├── docs/                 # PRD / ADR / research
+└── examples/             # 示例任务
+```
 
-* 先评估，再优化
-* 可复现 > 魔法
-* 显式记录一切（artifact-first）
-* 搜索，而不是单路径
-* 约束优先（成本 / 延迟 / 格式）
+按 [ROADMAP.md](ROADMAP.md) 推进中的模块：`harness/`（AI 合成评测集 + p¹ 方差过滤）、`engine/`（GEPA 反射进化：Reflector / Mutator / Frontier / Budget / VistaGuard）、`optimizers/`（多范式可插拔接口）、`store/`（SQLite，纯 Go 驱动）。
 
----
+## 当前状态
 
-## Roadmap
+v2 处于 V0 → V1 阶段：Go 骨架、Provider、并行评估引擎与 Web 看板已落地（`promptopt run --web` / `promptopt serve` 可用）；Harness Builder 与 GEPA 引擎按 V2 / V3 里程碑推进。
 
-### v0.1
+## v1（Python）归档
 
-* task / dataset / candidate 规范
-* eval runner
-* artifact 保存
+v1 为 Python 实现，已随 v2 转向停止维护，代码归档于 tag `v0.1-python`：
 
-### v0.2
-
-* diagnostics（失败分析）
-* 报告生成
-
-### v0.3
-
-* prompt 搜索（rewrite / few-shot / contract）
-* selection
-
-### v0.4
-
-* Pareto 优化
-* cost-aware 搜索
-
----
+```bash
+git checkout v0.1-python
+```
 
 ## 贡献
 
-欢迎贡献：
-
-* evaluator
-* diagnostics
-* optimizer 策略
-* 模型适配
-
----
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## License
 

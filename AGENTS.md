@@ -5,109 +5,77 @@
 ## 基本原则
 
 1. **第一性原理**: 所有结论必须基于严密的证据或可信的信源，不编造、不臆测
-2. **使用 uv 管理环境**: 必须使用 `uv` 而非 `pip` 进行依赖管理
-3. **遵守 Python 代码规范**: 编写代码时必须严格遵守 [PYTHON_RULES.md](PYTHON_RULES.md) 中的所有规则，目标 Python 3.14
+2. **遵守 Go 现代规范**: 必须遵守 [JetBrains go-modern-guidelines](https://github.com/JetBrains/go-modern-guidelines)，按 `go.mod` 声明的版本（Go 1.26）使用现代习语
+3. **标准库优先**: 优先使用标准库，引入第三方依赖须有明确理由；SQLite 须用纯 Go 驱动（免 cgo）
 
 ## 构建与测试命令
 
 ```bash
-# 安装依赖
-uv pip install -e ".[dev]"
+# 构建单二进制
+go build ./...
 
-# 运行测试
-uv run pytest
+# 构建 CLI 到当前目录
+go build -o promptopt ./cmd/promptopt
 
-# 类型检查
-uv run mypy src/
+# 静态检查
+go vet ./...
 
-# 代码格式化 / Lint
-uv run ruff check src/ tests/
+# 运行测试（完整跑加 -race）
+go test ./...
 
-# 构建包
-uv build
+# 安装 CLI 到 $GOPATH/bin
+go install ./cmd/promptopt
 ```
+
+CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）执行 `go vet ./...`、`go test -race ./...`、`go build ./...`，全绿才可合入。
 
 ## 核心架构
 
-```
-src/promptopt/
-├── cli/          # CLI 入口 (typer)
-├── core/         # 核心模型 (Task, Dataset, Candidate, Run)
-├── evaluators/   # 评估器 (exact_match, f1, json_validator)
-├── optimizers/   # 优化策略 (contract, fewshot)
-├── models/       # LLM 适配器 (litellm)
-├── storage/      # 数据库模型
-└── diagnostics/  # 失败分析
+```text
+PromptOpt/
+├── cmd/promptopt/        # CLI 入口：run / serve / version（标准库 flag）
+├── internal/
+│   ├── config/           # flag 默认值与 PROMPTOPT_* 环境变量解析
+│   ├── core/             # Task / Candidate / Dataset / RunResult 模型与 YAML 加载、split 过滤
+│   ├── provider/         # Provider 接口 + OpenAI 兼容实现（重试 / usage 统计）
+│   ├── eval/             # 并行评估引擎：worker 池、指标、Budget 阀门、事件流
+│   └── web/              # net/http 看板：run 列表 / 详情、SSE 实时事件流（go:embed 模板）
+├── docs/                 # PRD / ADR / research / agents 约定
+└── examples/             # 示例任务（json_extraction）
 ```
 
 ### 关键模型
 
-- **Task**: 任务定义，包含 `prompt_template`（含 `{input}` 占位符）
-- **Dataset**: 数据集配置
-- **Candidate**: 候选 Prompt，包含 `CandidateMetadata` 记录优化策略
-- **Run / RunResult / EvalResult**: 运行与评估结果
+- **Task**: 任务定义（`task.yaml`），含 `prompt_template`（`{input}` 占位符）、`metrics`、`primary_metric`
+- **Candidate**: 候选提示词（`candidate.yaml`），含 `id`、`prompt`
+- **Dataset / Sample**: 数据集与样本，`expected` 为参考答案（字符串 / 数组 / 对象），`split` 分 train/dev/test
+- **RunResult / SampleTrace / Event**: 运行摘要（指标均值、用量、退出码）、逐样本 trace、事件流（SSE 推送 + `events.jsonl` 回放）
 
 ### 评估指标
 
-支持 `exact_match`、`f1`、`json_validator`，可在 `Task.evaluation_metrics` 中指定。
-
-### 优化策略
-
-- `rewrite`: 指令重写
-- `fewshot`: Few-shot 示例优化
-- `contract`: JSON 输出约束强化
+支持 `exact_match`、`f1`、`json_validator`，在 Task 的 `metrics` 中声明；`primary_metric` 指定主指标，缺省取第一个声明值。
 
 ## 开发约定
 
-### 代码风格
-
-- 使用 **Ruff** (line-length: 88, target-version: py314)
-- 使用 **Mypy** strict 模式
-- Pydantic 模型使用 `model_dump()` 时需处理 `datetime` 序列化
-- **所有代码必须遵守 [PYTHON_RULES.md](PYTHON_RULES.md) 规则**，包括但不限于：
-  - 使用现代类型注解 (`list[int]`, `dict[str, ...]`, `X | None`)
-  - 使用 `@dataclass(slots=True)` 作为数据容器
-  - 避免 `Any`，除非不可避免
-  - 避免 legacy 类型 (`List`, `Dict`, `Optional`)
-
-### 模型定义示例
-
-```python
-class CandidateMetadata(BaseModel):
-    strategy: Literal["rewrite", "fewshot", "contract", "baseline"]
-    parent_id: str | None = None
-    teacher_model: str | None = None
-    generation_params: dict[str, object] = Field(default_factory=dict)
-```
-
-### CLI 开发
-
-使用 **Typer** 构建 CLI，参考 [cli/main.py](src/promptopt/cli/main.py)：
-
-- 命令使用 `@app.command()` 装饰器
-- 使用 `rich.console.Console` 输出格式化的表格和消息
-- 选项使用 `typer.Option(...)`，参数使用 `typer.Argument(...)`
-
-### 测试
-
-- 使用 **pytest** + **pytest-asyncio**
-- 测试文件放在 `tests/` 目录
-- 参考 [tests/test_core.py](tests/test_core.py) 中的 Pydantic 模型测试模式
+- **遵守 [JetBrains go-modern-guidelines](https://github.com/JetBrains/go-modern-guidelines)**：按 go.mod 版本用现代习语（错误处理、接口设计、并发、slice/map 用法等）
+- **输出约定**: 人类可读输出走 stderr；`--headless` 时 stdout 仅输出 JSON 运行摘要（见 [cmd/promptopt/run.go](cmd/promptopt/run.go)）
+- **退出码契约**: `0` 成功；`1` 评估失败或用法错误；`2` 预算耗尽（优先于 `1`）
+- **命令面**: `run --web` 提供实时 SSE 看板；`serve` 只读浏览历史 run，不暴露实时端点
 
 ## 示例项目
 
-参考 [examples/json_extraction/](examples/json_extraction/) 了解完整的工作流：
+参考 [examples/json_extraction/](examples/json_extraction/) 了解最小工作流：
 
-1. `promptopt init <name>` 初始化项目
-2. `promptopt eval` 运行评估
-3. `promptopt diagnose` 分析失败
-4. `promptopt optimize` 生成优化候选
+```bash
+cd examples/json_extraction
+promptopt run --task task.yaml --candidate candidate.yaml --dataset dataset.yaml --web
+```
 
 ## 常见陷阱
 
-1. **datetime 序列化**: `Candidate.model_dump()` 已处理 datetime 序列化，继承时需注意
-2. **pydantic ValidationError**: 使用 `pytest.raises(ValidationError)` 捕获验证错误
-3. **异步测试**: 确保 `pytest.ini_options` 中 `asyncio_mode = "auto"`
+1. **提示词渲染是字符串替换**: `{input}` 直接替换为样本输入，不是模板引擎——prompt 中的 JSON 字面花括号不会被吞掉
+2. **flag 互斥**: `--web` 与 `--headless` 互斥；`--addr` 仅与 `--web` 搭配生效
+3. **预算耗尽的退出码**: 存在因预算未派发的样本时退出码为 `2`，优先于评估失败的 `1`；Ctrl-C 中止仍算 `1`
 
 ## Agent skills
 
