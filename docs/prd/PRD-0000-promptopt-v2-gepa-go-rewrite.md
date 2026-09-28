@@ -1,6 +1,6 @@
 # PromptOpt v2：多范式提示词优化平台（GEPA 式闭环 + Go 重构）
 
-> **Status**: Draft | **PRD**: PRD-0000 | **Created**: 2026-09-28 | **Last updated**: 2026-09-28
+> **Status**: Grilled | **PRD**: PRD-0000 | **Created**: 2026-09-28 | **Last updated**: 2026-09-28
 
 ## Goal
 
@@ -27,10 +27,12 @@
 
 ## Assumptions (temporary)
 
-* 目标/优化模型经 OpenAI-compatible API 或 Anthropic API 访问；本地模型（Ollama/vLLM）走 OpenAI-compatible。
-* 单机单用户优先，Web UI 为 localhost 内嵌服务，不做多租户。
-* GEPA 核心机制按论文与仓库语义用 Go 重实现（参考实现为 Python，需以论文为准自行验证，不逐行移植）。
-* 用户在本会话后走 /grill → /story（或直接实现工作流）落地代码。
+（2026-09-28 grill 全部处置完毕）
+
+* ✅ 目标/优化模型经 API 访问（OpenAI-compat / Anthropic）——已由决策 6 与 Provider 需求覆盖，转为 Requirements。
+* ✅ 单机单用户、localhost Web——已由"开源单二进制工具"定位覆盖，转为 Requirements。
+* ✅ GEPA 按论文语义 Go 重实现——转为 V3 验收标准：算法行为测试（前沿单调性/预算扣减/VistaGuard 触发条件单元测试）+ 固定 mock-LLM 的端到端黄金用例 + 机制与论文定性对齐（不追求复现论文数字，追求机制等价）。
+* ✅ 后续走 /story 落地——正在执行。
 
 ## Open Questions
 
@@ -39,14 +41,17 @@
 ## Requirements
 
 * **一键入口**：`promptopt run "<prompt>"` 单命令从提示词到最优提示词全流程，无需手写任何配置文件。
+* **输出契约（单赢家+前沿附送，2026-09-28 grill 决议）**：约束硬过滤（JSON validity=100%、成本/延迟预算）→ 按主指标排序 → Top-1 为"最优提示词"；Pareto 前沿全量与取舍说明（各候选占优维度）随报告附送；检查点/仪表盘处用户可改选。
 * **评测数据构建**：Harness Builder 从用户提示词自动合成任务规格 + 评测集 + 指标；默认全托管直跑；支持暂停审核、增删样本、导入自有数据后继续；合成集经 p¹ 式方差过滤提纯（筛掉死样本与高随机性样本，保留高区分度核心样本）。
 * **GEPA 优化闭环（v1 核心）**：minibatch 执行 + 全量 trace 捕获（ASI）→ LLM 反思诊断 → 突变生成候选 → Pareto 前沿维护（per-example 分数 + 非支配排序）→ 前沿互补合并；内建 VISTA 稳定性保障（假设生成与重写解耦、语义标注假设并行验证、随机重启、ε-greedy 采样）。
 * **多范式可插拔（接口先行，实现分期）**：`Optimizer` 接口统一约束；v1 仅 GEPA 实现；ProTeGi / MIPROv2 风格 / TextGrad 风格 / EvoPrompt 风格为后续里程碑。
-* **预算阀门**：token 用量上限与评估次数上限双模式，可组合；耗尽即优雅终止并输出当前前沿最优 + 解释性报告；token 计量来自 provider usage 回传。
+* **预算阀门**（2026-09-28 grill 细化）：token 用量与评估次数双模式，可组合。token 分角色计量（executor / 优化侧分开统计，报告可解释成本去向），任一口径或合计超限即触发终止；评估次数仅计 executor 调用（对齐 GEPA `max_metric_calls` 语义）；触发后**软停**——当前 minibatch 跑完、完成结算再优雅退出，输出当前最优 + 解释性报告；token 计量来自 provider usage 回传。
 * **Web 仪表盘**：Go 单二进制 `go:embed` 前端，localhost 启动；htmx + 模板 + SSE 实时事件流；**V1 即交付看板骨架页**（运行状态 + 事件流，开源门面），V2 补合成集审核页，V4 完整视图（Pareto 前沿、预算消耗、trace 浏览、候选 diff、检查点干预）；CLI `--headless` 无头模式输出 JSON 供自动化。
 * **开源工程**：面向开源传播——V0 完成 README 重写（定位/badge/快速开始/架构图）+ CONTRIBUTING.md + LICENSE（MIT）确认；V1 起每个里程碑录制 demo GIF 进 README；V6 用 goreleaser 出多平台单二进制 Release + changelog。
 * **干预与全托管**：检查点默认自动放行（全托管），`--interactive` 或仪表盘中切换为人工确认。
 * **Provider**：接口抽象；v1 实现 OpenAI-compatible 通用适配（OpenAI/DeepSeek/Qwen/Ollama/vLLM）+ Anthropic 原生；带重试/限流/usage 统计。
+* **最终验证（verify）**：强引导用户提供 3~5 条真实样本作为**锚点验证集**（仅用于最终验证，永不进入优化循环，保持对合成分布的独立性）；拒绝提供时降级为合成保留集验证，报告必须标注"结论未经真实数据验证"（ADR 0001）。
+* **可复现 = 完整可重放**（2026-09-28 grill 决议）：每次 run 落盘完整决策上下文——模型版本、seed、参数、合成集快照、每次 LLM 调用的请求/响应 trace；`promptopt replay <run_id>` 可审计每一步为何发生。不承诺 bit 级一致，报告注明差异来源分类（采样随机性/模型版本/合成集再生成）。
 * **持久化**：SQLite（run/candidate/lineage/样本级结果）+ artifact 文件（YAML/JSON，可直接人工编辑干预）。
 * **工程规范**：遵守 go-modern-guidelines；CI 跑 `go vet` / `staticcheck` / `modernize` / 全量测试；同仓库原地重写，Python 代码删除并打 tag `v0.1-python` 留档。
 * **遗留处置**：45 个旧 issue 批量关闭（评论指向本 PRD 与父 Issue），能力在新 roadmap 中重新拆解为新 issue。
@@ -64,6 +69,8 @@
 * [ ] 旧 issue 全部关闭且评论含指向说明；新 roadmap 里程碑拆解为 GitHub issue/里程碑
 * [ ] V1 结束时浏览器可打开看板骨架页（实时事件流可见）
 * [ ] 仓库具备开源门面：badge / 快速开始 / 贡献指南 / demo GIF 齐备
+* [ ] V3 算法行为测试全绿：前沿单调性（新入前沿候选不被刚移出者支配）、预算分角色扣减、VistaGuard 触发条件；固定 mock-LLM 端到端黄金用例可重放
+* [ ] `promptopt replay <run_id>` 能完整审计一次 run 的每次 LLM 调用与决策
 
 ## Definition of Done
 
@@ -131,7 +138,9 @@ promptopt/                      # Go module（同仓库原地重写）
 
 **Context**：平台转向需定算法核心、技术栈、交互形态、数据来源与遗留处置。
 **Decision**：v1 = GEPA 反射进化（含 VISTA 稳定性机制）+ p¹ 方差过滤；Go 同仓库原地重写（单二进制、go:embed 前端、htmx+SSE 仪表盘，CLI 无头模式）；评测数据 AI 合成+可干预；45 旧 issue 批量关闭+新 roadmap 重拆；Provider 走 OpenAI-compatible 通用 + Anthropic。**追加决策（2026-09-28）**：开源工具定位强化——Web 看板骨架页前置到 V1 并作为门面打磨（验收含可视化交付），V0 加开源配套（README/badge/CONTRIBUTING），V6 加 goreleaser Release 规范；前端维持 htmx 不升级 SPA。
-**Consequences**：放弃 Python 生态与 gepa 参考实现的直接复用，算法正确性以论文语义+自建测试保证；自证循环风险由 p¹ 过滤+人工检查点+held-out 验证缓解；单人维护负担由 V0–V6 分期控制；页面前置使 V1 工期略增，换来早期可传播的开源门面。
+**已升格 ADR**：ADR 0001（合成评测集与可选真实锚点）、ADR 0002（GEPA+p¹ 核心 + 多范式可插拔）、ADR 0003（Go 同仓库原地重写）。
+**未升格 ADR 的决议**（grill 判定"难逆转"条件不满足，记录于本 PRD）：输出契约（单赢家+前沿附送）、预算口径（分角色+合计+软停）、可复现语义（完整可重放）、前端栈（htmx）。
+**Consequences**：放弃 Python 生态与 gepa 参考实现的直接复用，算法正确性以论文语义+自建测试保证；自证循环风险由 p¹ 过滤+人工检查点+真实锚点验证缓解（ADR 0001）；单人维护负担由 V0–V6 分期控制；页面前置使 V1 工期略增，换来早期可传播的开源门面。
 
 ## Implementation Plan (small PRs)
 
@@ -141,19 +150,21 @@ promptopt/                      # Go module（同仓库原地重写）
 * V3 GEPA 引擎：Reflector/Mutator/Frontier/Budget/VistaGuard、lineage、报告
 * V4 Web UI 完整化：前沿看板、预算仪表、trace 浏览、候选 diff、采纳干预、报告导出
 * V5 多范式扩展：Optimizer 插件接口固化、ProTeGi → MIPROv2 风格 → EvoPrompt 风格分期、范式路由器
-* V6 工程化：无头模式退出码规范、GitHub Actions 集成、回归门禁（verify/select/rollback）、goreleaser Release 规范
+* V6 工程化：无头模式退出码规范、GitHub Actions 集成、回归门禁（verify 走锚点验证集/合成保留集降级、select/rollback）、goreleaser Release 规范
 
 ## Technical Notes
 
 * GEPA 关键机制备忘：ASI = 文本版梯度；前沿按 per-example 分数维护互补优势；`max_metric_calls` 是全局预算阀门。
 * go-modern-guidelines README 只含摘要，细则在 FEATURES.md（V0 实现时通读）；`modernize` analyzer 已入 gopls，可做 CI 检查。
-* 失败/边界（发散扫描结论）：①自证循环——AI 合成评测集有偏，靠 p¹ 过滤 + 人工检查点 + 优化结束在保留集上 held-out 验证缓解；②坏种子退化——VISTA 机制内建；③预算耗尽——优雅终止输出当前最优；④API 抖动——provider 层重试 + 评估结果缓存。
+* 失败/边界（发散扫描结论）：①自证循环——AI 合成评测集有偏，靠 p¹ 过滤 + 人工检查点 + 真实锚点验证缓解（ADR 0001）；②坏种子退化——VISTA 机制内建；③预算耗尽——软停输出当前最优；④API 抖动——provider 层重试 + 评估结果缓存。
+* 实现细节自答（grill 期间，无需用户决策）：并行评估下预算扣减需原子性（Go 侧 atomic/mutex 保护 Budget 计数器）；`v0.1-python` tag 指向 v1 末态 commit 9f9139e。
 * 远期演化（记录不进 v1）：范式路由器（用户选型准则产品化）、多组件流水线优化（TextGrad 风格）、`optimize_anything` 泛化（任意文本参数）。
 * 已检查文件：ROADMAP.md、README.md、AGENTS.md、pyproject.toml、src/promptopt/**、examples/json_extraction/**。
 
 ## Traceability
 
 - **Created by**: `/think` (2026-09-28)
+- **Grilled by**: `/grill` (completed 2026-09-28) — 4 项决议落地（自证循环锚点→ADR 0001、输出契约、预算口径、可复现=可重放）；4 条假设全部处置；ADR 0002/0003 由 ADR-lite 升格；CONTEXT.md 建立（16 术语）
 - **New terms**: GEPA, 反射式突变 (reflective mutation), Pareto 前沿 (Pareto frontier), ASI (Actionable Side Information), 文本梯度 (textual gradient), 方差过滤 (variance filtering) / 最小辨识集, 假设解耦 (hypothesis decoupling), Harness Builder, 预算阀门 (budget valve), 全托管 (autopilot), 检查点干预 (checkpoint intervention)
 
 ## Issue

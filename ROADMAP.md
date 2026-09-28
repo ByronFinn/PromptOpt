@@ -146,7 +146,7 @@ promptopt/                      # Go module（同仓库原地重写，单二进�
 **目标**：进 CI、防退化（吸收旧 M4/M5）。
 
 - [ ] `--headless` 无头模式 + JSON 输出 + 退出码规范（0=成功 / 1=评估失败 / 2=预算耗尽 / 3=回归）
-- [ ] verify：held-out 保留集验证（防合成集自证循环的最终闸门）
+- [ ] verify：锚点验证集（用户 3~5 条真实样本，ADR 0001）优先，降级为合成保留集 + 报告标注
 - [ ] regression detection + 约束检查（JSON validity 100% / 成本 / 延迟）
 - [ ] rollback（tag + artifact 天然支持一键回退）
 - [ ] GitHub Actions 集成模板
