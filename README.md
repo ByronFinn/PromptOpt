@@ -121,10 +121,33 @@ runs/<run_id>/
 └── summary.json         # 运行摘要：状态、退出码、指标均值、用量
 ```
 
-### 浏览历史运行
+### Web 仪表盘
+
+`run --web` 随运行启动实时看板（htmx + SSE，内嵌单二进制，无前端构建链），run 结束后看板驻留——可在前沿看板采纳候选，直至 Ctrl-C；`--addr` 自定义监听地址（默认 `127.0.0.1:17700`，仅与 `--web` 搭配生效）：
 
 ```bash
-promptopt serve    # http://127.0.0.1:17700 查看 run 摘要、样本 trace 与事件回放（只读）
+promptopt run "从中医病历文本中抽取症状、证型与方剂，输出 JSON" --web
+```
+
+<!-- TODO(V5 后补 GIF)：仪表盘截图 / demo GIF 占位（前沿看板热力表 + 采纳候选流程） -->
+
+页面清单：
+
+| 页面 | 路由 | 能做什么 |
+|---|---|---|
+| 首页 | `/` | run 卡片列表：状态、退出码、指标均值、用量 |
+| run 详情 | `/runs/{id}` | 逐样本 trace（prompt / 响应 / 得分 / 诊断）、**预算仪表**（token ∥ 评估次数实时消耗与余量）、SSE 事件流 |
+| 前沿看板 | `/runs/{id}/frontier` | Pareto 候选对比：per-sample 热力表、支配关系标注、Top-1、谱系准入记录、**采纳候选**（原子写 `adopted.json`，幂等，SSE 广播） |
+| trace 浏览器 | `/runs/{id}/trace` | 顶层 / `evals/*` / `opt-calls` 单元逐层下钻：样本详情、LLM 调用请求响应全文、与 dataset.json 联查 |
+| 候选 diff | `/runs/{id}/diff?a=&b=` | 两候选提示词 side-by-side 行级对比（新增 / 删除统计） |
+| run 对比 | `/compare?a=&b=` | 两次 run 的指标均值、分角色用量、Top-1 并排对照（含 Δ 列） |
+| 优化报告 | `/runs/{id}/report` | 中文解释性报告站内渲染，下载 `report.md` 附件或自包含 `report.html` |
+| 合成集审核 | `/synth/{id}` | 零配置模式检查点：增删改合成样本、批准放行（`--interactive` 时暂停等待） |
+
+`promptopt serve` 用同一套页面浏览历史 run（含 events.jsonl 事件回放与 adopt 产物干预端点，但不暴露实时端点）：
+
+```bash
+promptopt serve    # http://127.0.0.1:17700
 ```
 
 ## 架构一览
@@ -141,7 +164,7 @@ PromptOpt/
 │   ├── eval/             # 并行评估引擎：worker 池、exact_match / f1 / json_validator、预算阀门
 │   ├── harness/          # 零配置合成管线：任务规格/样本合成、p¹ 方差过滤、检查点门
 │   ├── engine/           # GEPA 优化引擎：Reflector / Mutator / Pareto 前沿 / VistaGuard / lineage / 报告
-│   └── web/              # 内嵌 Web 看板：run 列表 / 详情、SSE 实时事件流（go:embed 模板）
+│   └── web/              # 内嵌 Web 看板：run 列表/详情、前沿看板、trace 浏览器、diff/对比、报告导出、SSE 实时事件流（go:embed 模板）
 ├── docs/                 # PRD / ADR / research / reports
 └── examples/             # 示例任务
 ```
@@ -150,7 +173,7 @@ PromptOpt/
 
 ## 当前状态
 
-v2 处于 V0 → V3 已落地阶段：Go 骨架、Provider、并行评估引擎、Web 看板、零配置 Harness Builder（合成 → p¹ 过滤 → 检查点 → baseline 评估，含合成集审核页）与 GEPA 优化引擎（反思突变 + Pareto 前沿 + VistaGuard 防护 + lineage/报告）均可用；下一步按 V4 里程碑完整化 Web 干预体验。
+v2 处于 V0 → V4 已落地阶段：Go 骨架、Provider、并行评估引擎、Web 看板、零配置 Harness Builder（合成 → p¹ 过滤 → 检查点 → baseline 评估，含合成集审核页）、GEPA 优化引擎（反思突变 + Pareto 前沿 + VistaGuard 防护 + lineage/报告）与完整化 Web 干预体验（前沿看板、预算仪表、trace 浏览器、候选 diff、run 对比、报告导出、候选采纳）均可用；下一步按 V5 里程碑扩展多范式优化器。
 
 ## v1（Python）归档
 
