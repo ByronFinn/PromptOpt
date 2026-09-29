@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -148,6 +149,63 @@ func NewServer(runsDir, synthDir string, bus *Bus) *Server {
 	return &Server{runsDir: runsDir, synthDir: synthDir, bus: bus}
 }
 
+// originGuard is the source check wrapped around every route: the Host
+// header must be loopback (answers DNS rebinding, which targets reads),
+// and non-GET requests must not be cross-site (answers CSRF on the
+// write endpoints — adopt and the synth review mutations are browser
+// "simple requests" that skip any CORS preflight). Cross-site shape is
+// detected via Sec-Fetch-Site when present and via a mismatching Origin
+// header otherwise; requests without either (curl, tests, htmx on the
+// same origin) pass.
+func (s *Server) originGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopbackHost(r.Host) {
+			http.Error(w, "host not allowed", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+				http.Error(w, "cross-site request rejected", http.StatusForbidden)
+				return
+			}
+			if origin := r.Header.Get("Origin"); origin != "" && !sameOrigin(origin, r.Host) {
+				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isLoopbackHost reports whether the Host header's host part is a
+// loopback address or localhost. The port is deliberately unchecked:
+// any request arriving here by definition targeted a port this server
+// listens on (the Server never learns the configured one, and the
+// harness runs it on random test ports).
+func isLoopbackHost(hostPort string) bool {
+	h := hostPort
+	if hp, _, err := net.SplitHostPort(hostPort); err == nil {
+		h = hp
+	}
+	h = strings.Trim(h, "[]")
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.EqualFold(h, "localhost")
+}
+
+// sameOrigin reports whether an Origin header points back at the
+// request's own host: the dashboard serves plain HTTP, so comparing
+// host:port is sufficient. "null" and unparsable origins are treated
+// as foreign.
+func sameOrigin(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return u.Host != "" && strings.EqualFold(u.Host, host)
+}
+
 // Handler returns the routed HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -167,7 +225,7 @@ func (s *Server) Handler() http.Handler {
 	if s.bus != nil {
 		mux.HandleFunc("GET /events", s.handleLiveEvents)
 	}
-	return mux
+	return s.originGuard(mux)
 }
 
 // Listen starts serving in the background; the caller owns shutdown.

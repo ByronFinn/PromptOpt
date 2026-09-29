@@ -762,3 +762,118 @@ func TestServeModeRoutesAndNoLiveEndpoint(t *testing.T) {
 		t.Errorf("serve mode adopt = %d, want 200", res.StatusCode)
 	}
 }
+
+// --- ⑪ write-endpoint origin guard ----------------------------------------------
+
+// TestWriteOriginGuard pins the CSRF gate: browser write requests are
+// simple POSTs with no preflight, so a cross-site Origin or
+// Sec-Fetch-Site must be rejected before any handler mutates
+// artifacts; same-origin htmx and Origin-less server-side clients
+// pass.
+func TestWriteOriginGuard(t *testing.T) {
+	runsDir := t.TempDir()
+	id := "20260929-130000-g3"
+	runDir := writeFrontierFixture(t, runsDir, id)
+	ts := httptest.NewServer(NewServer(runsDir, "", nil).Handler())
+	t.Cleanup(ts.Close)
+
+	post := func(path, header, value string) int {
+		form := url.Values{"candidate": {"g01"}}
+		req, err := http.NewRequest(http.MethodPost, ts.URL+path, strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if header != "" {
+			req.Header.Set(header, value)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+
+	// Cross-site Origin rejected, artifact untouched.
+	if code := post("/runs/"+id+"/adopt", "Origin", "http://evil.example"); code != http.StatusForbidden {
+		t.Errorf("cross-origin adopt = %d, want 403", code)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "adopted.json")); !os.IsNotExist(err) {
+		t.Error("rejected adopt still wrote adopted.json")
+	}
+	// Sandbox-iframe Origin "null" is foreign too.
+	if code := post("/runs/"+id+"/adopt", "Origin", "null"); code != http.StatusForbidden {
+		t.Errorf("null-origin adopt = %d, want 403", code)
+	}
+	// Sec-Fetch-Site: cross-site rejected even without Origin (no-cors
+	// fetch shape).
+	if code := post("/runs/"+id+"/adopt", "Sec-Fetch-Site", "cross-site"); code != http.StatusForbidden {
+		t.Errorf("cross-site fetch adopt = %d, want 403", code)
+	}
+	// One middleware covers the synth review writes as well: the guard
+	// answers before the route (an unknown synth id would 404 instead).
+	if code := post("/synth/no-such/approve", "Origin", "http://evil.example"); code != http.StatusForbidden {
+		t.Errorf("cross-origin synth approve = %d, want 403", code)
+	}
+
+	// Same-origin Origin (htmx POST) passes and adopts.
+	if code := post("/runs/"+id+"/adopt", "Origin", ts.URL); code != http.StatusOK {
+		t.Errorf("same-origin adopt = %d, want 200", code)
+	}
+	assertAdopted(t, runDir, "g01")
+	// No Origin at all (curl, server-side clients) passes: the existing
+	// Origin-less suite doubles as this regression net.
+	if code := post("/runs/"+id+"/adopt", "", ""); code != http.StatusOK {
+		t.Errorf("origin-less adopt = %d, want 200", code)
+	}
+}
+
+// TestHostGuardBlocksRebinding pins the DNS-rebinding defense: a
+// non-loopback Host is refused on reads and writes alike (the rebind
+// goal is reading the response), while loopback hosts on any port —
+// the harness serves on random test ports — keep working.
+func TestHostGuardBlocksRebinding(t *testing.T) {
+	runsDir := t.TempDir()
+	id := "20260929-130000-g4"
+	writeFrontierFixture(t, runsDir, id)
+	ts := httptest.NewServer(NewServer(runsDir, "", nil).Handler())
+	t.Cleanup(ts.Close)
+
+	for _, host := range []string{"evil.example:17700", "10.0.0.5:17700"} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			req, err := http.NewRequest(method, ts.URL+"/runs/"+id+"/frontier", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Host = host
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res.Body.Close()
+			if res.StatusCode != http.StatusForbidden {
+				t.Errorf("%s with Host %q = %d, want 403", method, host, res.StatusCode)
+			}
+		}
+	}
+
+	// Loopback Host on an arbitrary (here: the test server's) port passes.
+	port, ok := strings.CutPrefix(ts.URL, "http://127.0.0.1:")
+	if !ok {
+		t.Fatalf("test server URL %q is not loopback", ts.URL)
+	}
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/runs/"+id+"/frontier", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Host = "localhost:" + port
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("GET with loopback Host = %d, want 200", res.StatusCode)
+	}
+}
