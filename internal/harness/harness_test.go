@@ -9,11 +9,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ByronFinn/PromptOpt/internal/config"
 	"github.com/ByronFinn/PromptOpt/internal/core"
 	"github.com/ByronFinn/PromptOpt/internal/eval"
 	"github.com/ByronFinn/PromptOpt/internal/provider"
@@ -239,20 +241,22 @@ func TestSynthesizeSamplesNormalizesIDsAndSplits(t *testing.T) {
 func TestSynthesizeEscalatesOnReasoningBurn(t *testing.T) {
 	emptyBurn := `{"choices":[{"finish_reason":"length","message":{"role":"assistant","reasoning_content":"很长的推理过程……","content":""}}],"usage":{"prompt_tokens":10,"completion_tokens":4096,"total_tokens":4106}}`
 	srv, bodies := startLLM(t, func(call int, body string) (int, string) {
+		floor := strconv.Itoa(config.DefaultSynthMaxTokens)
+		doubled := strconv.Itoa(config.DefaultSynthMaxTokens * 2)
 		switch call {
 		case 1:
-			if !strings.Contains(body, `"max_tokens":4096`) {
-				t.Errorf("first attempt must carry the floor cap 4096: %.200s", body)
+			if !strings.Contains(body, `"max_tokens":`+floor) {
+				t.Errorf("first attempt must carry the floor cap %s: %.200s", floor, body)
 			}
 			return http.StatusOK, emptyBurn
 		case 2:
-			if !strings.Contains(body, `"max_tokens":8192`) {
-				t.Errorf("escalated attempt must double the cap to 8192: %.200s", body)
+			if !strings.Contains(body, `"max_tokens":`+doubled) {
+				t.Errorf("escalated attempt must double the cap to %s: %.200s", doubled, body)
 			}
 			return http.StatusOK, completion(specJSON)
 		default:
-			if !strings.Contains(body, `"max_tokens":8192`) {
-				t.Errorf("later stages must start at the learned cap 8192: %.200s", body)
+			if !strings.Contains(body, `"max_tokens":`+doubled) {
+				t.Errorf("later stages must start at the learned cap %s: %.200s", doubled, body)
 			}
 			return http.StatusOK, completion(probesJSON)
 		}
@@ -265,8 +269,8 @@ func TestSynthesizeEscalatesOnReasoningBurn(t *testing.T) {
 	if task.Name != "tcm_zhenghou" {
 		t.Errorf("task = %+v", task)
 	}
-	if s.floor != 8192 {
-		t.Errorf("learned floor = %d, want 8192", s.floor)
+	if s.floor != config.DefaultSynthMaxTokens*2 {
+		t.Errorf("learned floor = %d, want %d", s.floor, config.DefaultSynthMaxTokens*2)
 	}
 	probes, err := s.SynthesizeProbes(context.Background(), task, 2)
 	if err != nil || len(probes) != 2 {

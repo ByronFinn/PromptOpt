@@ -30,7 +30,11 @@ const (
 
 	DefaultSamples        = 6    // synthesized samples in zero-config mode
 	DefaultProbeVariants  = 2    // probe prompt variants for the p¹ filter
-	DefaultSynthMaxTokens = 4096 // completion floor for synthesis calls
+	// DefaultSynthMaxTokens: one synthesis call returns a task spec plus
+	// N samples as JSON — reasoning models spend most of the budget
+	// thinking first. jiuwei-tcm serves n_ctx=20736, so 8192 completion
+	// tokens leaves ample headroom and stops content-empty responses.
+	DefaultSynthMaxTokens = 8192 // completion floor for synthesis calls
 )
 
 // resolve returns the first non-empty of flag value, environment
