@@ -1,0 +1,166 @@
+{{define "adopt_panel"}}
+<div id="adopt-panel">
+  {{if .Adopted}}
+    <span class="badge ok">已采纳 <span class="mono">{{.Adopted}}</span></span>
+    <span class="dim" style="font-size:.8rem">{{.AdoptedAt}}</span>
+  {{else}}
+    <span class="dim">尚未采纳候选</span>
+  {{end}}
+  <form hx-post="/runs/{{.ID}}/adopt" hx-target="#adopt-panel" hx-swap="outerHTML" style="display:flex;gap:.5rem;align-items:center">
+    <select name="candidate" aria-label="候选">
+      {{range .MemberIDs}}<option value="{{.}}"{{if eq . $.Adopted}} selected{{end}}>{{.}}{{if eq . $.BestID}}（Top-1）{{end}}</option>{{end}}
+    </select>
+    <button class="primary" type="submit">{{if .Adopted}}改选{{else}}采纳{{end}}</button>
+  </form>
+  <span class="dim" style="font-size:.78rem">写入 runs/{{.ID}}/adopted.json；重复采纳同一候选幂等。</span>
+</div>
+{{end}}
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>前沿看板 {{.ID}} · PromptOpt</title>
+<link rel="icon" href="data:,">
+<script src="/static/htmx.min.js"></script>
+<style>
+ :root{--fg:#1f2328;--dim:#6e7781;--line:#d8dee4;--bg:#f6f8fa;--card:#fff;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700}
+ *{box-sizing:border-box}
+ body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;margin:0;padding:2rem 1.25rem;background:var(--bg);color:var(--fg);line-height:1.5}
+ main{max-width:76rem;margin:0 auto}
+ h1{font-size:1.25rem;margin:0 0 .25rem}
+ h2{font-size:1rem;margin:2rem 0 .75rem}
+ .sub{color:var(--dim);font-size:.85rem;margin:0 0 1rem}
+ .badge{display:inline-block;padding:.05rem .55rem;border-radius:1rem;font-size:.75rem;color:#fff;background:var(--dim);vertical-align:.15rem;margin-right:.4rem}
+ .badge.ok{background:var(--ok)}.badge.bad{background:var(--bad)}.badge.warn{background:var(--warn)}
+ a{color:#0969da;text-decoration:none}
+ a:hover{text-decoration:underline}
+ table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:.5rem;font-size:.85rem;overflow:hidden}
+ th,td{padding:.4rem .55rem;border-top:1px solid var(--line);text-align:left;vertical-align:top}
+ thead th{border-top:none;color:var(--dim);font-weight:500;white-space:nowrap}
+ table.kv th{width:10rem;white-space:nowrap}
+ .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.78rem}
+ .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.dim{color:var(--dim)}
+ .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(21rem,1fr));gap:.75rem;margin:.5rem 0}
+ .card{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:.85rem 1rem}
+ .card .meta{color:var(--dim);font-size:.8rem;margin-top:.3rem}
+ pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:.4rem;padding:.5rem .7rem;font-size:.78rem;max-height:16rem;overflow:auto;margin:.35rem 0 0}
+ details{margin:.35rem 0 0}
+ summary{cursor:pointer;font-size:.8rem;color:var(--dim)}
+ .heat th,.heat td{white-space:nowrap}
+ .heat td{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.75rem;text-align:center}
+ .notes li{color:var(--warn);font-size:.8rem}
+ button{font:inherit;font-size:.8rem;padding:.25rem .8rem;border:1px solid var(--line);border-radius:.4rem;background:var(--card);cursor:pointer}
+ button:hover{background:var(--bg)}
+ button.primary{border-color:var(--ok);color:var(--ok);font-weight:600}
+ select{font:inherit;font-size:.8rem;border:1px solid var(--line);border-radius:.35rem;padding:.25rem .35rem;background:var(--card);color:var(--fg)}
+ #adopt-panel{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:.75rem 1rem;display:flex;align-items:center;gap:.8rem;flex-wrap:wrap}
+ .empty{color:var(--dim);padding:1.25rem;text-align:center;border:1px dashed var(--line);border-radius:.5rem;background:var(--card)}
+</style>
+</head>
+<body>
+<main>
+<h1>前沿看板 <span class="mono">{{.ID}}</span></h1>
+<p class="sub">
+  <a href="/">run 列表</a> · <a href="/runs/{{.ID}}">run 详情</a> · <a href="/runs/{{.ID}}/trace">trace 浏览器</a>{{if .GeneratedAt}} · 生成于 {{.GeneratedAt}}{{end}}
+</p>
+
+<h2>概览</h2>
+<table class="kv">
+  <tr><th>主指标</th><td class="mono">{{.Primary}}</td></tr>
+  {{if .HasConstraint}}<tr><th>约束指标</th><td class="mono">{{.Constraint}}</td></tr>{{end}}
+  <tr><th>优化轮数</th><td>{{.Rounds}}（{{.ReasonLabel}}{{if .Reason}} · {{.Reason}}{{end}}）</td></tr>
+  <tr><th>Top-1</th><td><span class="mono">{{.Best.ID}}</span> · 主指标 {{.BestPrimaryMean}}{{if .HasConstraint}} · 约束 {{.BestConstraintLabel}}{{end}}</td></tr>
+</table>
+
+{{if .Notes}}
+<ul class="notes">
+  {{range .Notes}}<li>{{.}}</li>{{end}}
+</ul>
+{{end}}
+
+<h2>采纳 / 改选</h2>
+{{template "adopt_panel" .Adopt}}
+
+<h2>候选卡片（{{len .Members}}）</h2>
+<div class="cards">
+{{range .Members}}
+  <div class="card">
+    <div>
+      {{if .IsBest}}<span class="badge ok">Top-1</span>{{end}}
+      {{if .IsBaseline}}<span class="badge">baseline</span>{{end}}
+      <span class="mono">{{.ID}}</span>
+    </div>
+    <div class="meta">{{.Operator}} · 第 {{.Round}} 轮 · 主指标 <strong>{{.PrimaryMean}}</strong> · 独占占优 {{.Wins}} 样本{{if .HasConstraint}} · 约束 {{.JSONRate}}{{if .ConstraintOK}} <span class="ok">满足</span>{{else}} <span class="bad">不满足</span>{{end}}{{end}}</div>
+    {{if not .NoDomMarks}}
+      {{if .IsBaseline}}
+        <div class="meta dim">基线候选</div>
+      {{else if .DominatesBaseline}}
+        <div class="meta"><span class="ok">支配 baseline</span>（逐样本都不差且至少一样本严格更优）</div>
+      {{else if .DominatedByBaseline}}
+        <div class="meta"><span class="bad">被 baseline 支配</span></div>
+      {{else}}
+        <div class="meta dim">与 baseline 互不支配（各有胜出的样本）</div>
+      {{end}}
+    {{end}}
+    {{if .Prompt}}
+    <details><summary>提示词全文</summary><pre>{{.Prompt}}</pre></details>
+    {{end}}
+    <div class="meta">
+      {{if not .IsBest}}<a href="/runs/{{$.ID}}/diff?a={{.ID}}&amp;b={{$.Best.ID}}">与 Top-1 对比</a>{{else}}—{{end}}
+    </div>
+  </div>
+{{end}}
+</div>
+
+<h2>per-sample 热力表</h2>
+{{if .HasSampleIDs}}
+<div style="overflow-x:auto">
+<table class="heat">
+  <thead><tr><th>候选</th>{{range .SampleIDs}}<th class="mono">{{.}}</th>{{end}}</tr></thead>
+  <tbody>
+  {{range .Members}}
+    <tr>
+      <td class="mono">{{.ID}}{{if .IsBest}} ★{{end}}</td>
+      {{range .Cells}}<td style="background:{{.Color}}">{{.Value}}</td>{{end}}
+      {{if not .Cells}}{{/* legacy artifact without scores */}}{{range $.SampleIDs}}<td class="dim">—</td>{{end}}{{end}}
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<p class="sub">列头 = frontier.json 顶层 sample_ids（固定保留集顺序，与成员 scores 一一对齐）；色深 ∝ 该样本主指标得分。★ = Top-1。</p>
+{{else}}
+<div class="empty">frontier.json 无 sample_ids / scores（旧版产物），热力表不可用</div>
+{{end}}
+
+<h2>支配关系说明</h2>
+<p class="sub">
+  前沿成员两两互不支配：A 支配 B 当且仅当 A 在每个保留集样本上得分都 ≥ B 且至少一个样本严格更高（engine.Dominates，逐样本主指标分）。
+  约束指标（json_validator）不参与支配（量纲不混入），仅作 Top-1 硬过滤；被支配或分数向量克隆的候选不入前沿。
+  Top-1 选取：约束均值=1 硬过滤 → 主指标降序 → 约束均值 → ID 序。
+</p>
+
+<h2>谱系（lineage）</h2>
+{{if .Lineage}}
+<table>
+  <thead><tr><th>候选</th><th>轮次</th><th>来源</th><th>主指标均值</th><th>判定</th><th>vs baseline</th></tr></thead>
+  <tbody>
+  {{range .Lineage}}
+    <tr>
+      <td class="mono">{{.ID}}</td>
+      <td class="mono">{{.Round}}</td>
+      <td class="mono">{{.Origin}}</td>
+      <td class="mono">{{.PrimaryMean}}</td>
+      <td><span class="{{.LabelClass}}">{{.Label}}</span></td>
+      <td>{{if .DomLabel}}{{.DomLabel}}{{else}}—{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="empty">lineage.json 不存在或为空</div>
+{{end}}
+</main>
+</body>
+</html>

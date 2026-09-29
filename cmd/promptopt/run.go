@@ -112,6 +112,15 @@ func runManual(o runOptions) int {
 		sink.close()
 		return exitFailure
 	}
+	// The split-filtered set makes the run self-contained: trace views
+	// join sample ids against this dataset.json for input/expected.
+	if err := writeJSONFile(filepath.Join(runDir, "dataset.json"), core.Dataset{
+		Name: dataset.Name, Samples: samples,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
+		sink.close()
+		return exitFailure
+	}
 
 	eng := &eval.Engine{
 		RunID: runID, RunDir: runDir, Model: o.model, MaxTokens: o.maxTokens,
@@ -128,6 +137,10 @@ func runManual(o runOptions) int {
 		sink.close()
 		return exitFailure
 	}
+	// Terminal calibration snapshot: it covers failed samples too (their
+	// sample_done carries no usage payload), which the incremental gauge
+	// on the dashboard would otherwise miss.
+	sink.fanout.emit(engine.NewUsageEvent(eng.Budget, runID, "eval"))
 	return finishRun(o, sink, res, runDir, task.Primary(), nil)
 }
 
@@ -208,6 +221,11 @@ func runSynthesized(o runOptions) int {
 		sink.close()
 		return exitFailure
 	}
+	// Calibration snapshot right after the pipeline: probe evaluations
+	// are metered into the shared budget as executor-role usage but
+	// their events stay inside the filter, so this is the first point
+	// where the live gauge can see that consumption.
+	emit(engine.NewUsageEvent(budget, runID, "pipeline"))
 	primary := ""
 	if spec, err := harness.LoadSpec(filepath.Join(synthBase, runID)); err == nil {
 		primary = spec.Task.Primary()
@@ -240,6 +258,10 @@ func runSynthesized(o runOptions) int {
 		_, usage := budget.Snapshot()
 		res.UsageByRole = usage
 	}
+	// Terminal snapshot before run_done: the optimizer's last dial and
+	// any failed-sample usage land in the gauge even though no further
+	// sample_done events will carry them.
+	emit(engine.NewUsageEvent(budget, runID, "terminal"))
 	fanoutTerminalRunDone(sink.fanout.emit, res)
 	var best *engine.Result
 	if err == nil {
@@ -275,6 +297,13 @@ func runOptimization(ctx context.Context, runID, runDir, synthDir string, o runO
 			return engine.Result{}, errors.New("过滤后保留样本集为空，无法进行优化")
 		}
 		kept = samples.Samples
+	}
+	// The finalized kept set makes the run self-contained for trace
+	// views (sample id → input/expected join).
+	if err := writeJSONFile(filepath.Join(runDir, "dataset.json"), core.Dataset{
+		Name: "synth", Samples: kept,
+	}); err != nil {
+		return engine.Result{}, fmt.Errorf("write dataset.json: %w", err)
 	}
 	req := engine.Request{
 		Task: spec.Task,
@@ -380,7 +409,9 @@ func (s *runSink) close() {
 // finishRun persists the run summary, tears down the sink and prints
 // the result per the output convention (headless: JSON on stdout).
 // opt, when non-nil, adds the optimizer's best-prompt block to the
-// human summary.
+// human summary. With --web the dashboard stays up after the summary
+// is written until Ctrl-C: the frontier page's adopt flow needs the
+// pages (and the SSE stream) alive past run_done.
 func finishRun(o runOptions, sink *runSink, res core.RunResult, runDir, primary string, opt *engine.Result) int {
 	// summary.json is the primary artifact (spec); run.json is written
 	// alongside with identical content as the engine-slice contract
@@ -391,6 +422,13 @@ func finishRun(o runOptions, sink *runSink, res core.RunResult, runDir, primary 
 			sink.close()
 			return exitFailure
 		}
+	}
+	if o.web {
+		printHumanSummary(os.Stderr, res, runDir, primary, opt)
+		fmt.Fprintf(os.Stderr, "promptopt run: 看板驻留中（http://%s），可在前沿看板采纳候选，Ctrl-C 退出\n", o.addr)
+		<-sink.ctx.Done()
+		sink.close()
+		return res.ExitCode
 	}
 	sink.close()
 	if o.headless {

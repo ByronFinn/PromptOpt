@@ -156,5 +156,27 @@ func (a *advisor) chat(ctx context.Context, stage, prompt string, tokenCap int) 
 		return provider.ChatResponse{}, fmt.Errorf("opt call %s: %w", stage, err)
 	}
 	a.budget.RecordUsage(core.RoleOptimizer, resp.Usage)
+	// Every successful optimizer dial publishes a usage snapshot so the
+	// live budget gauge tracks optimizer-role consumption too.
+	if a.onEvent != nil {
+		a.onEvent(NewUsageEvent(a.budget, a.runID, stage))
+	}
 	return resp, nil
+}
+
+// NewUsageEvent builds one usage snapshot event carrying the full
+// Budget.Snapshot() — evaluations started plus per-role usage for both
+// roles — under Detail. The advisor and the cmd layer's terminal
+// emitters share this constructor so every usage event on the wire has
+// one payload shape.
+func NewUsageEvent(b *eval.Budget, runID, stage string) eval.Event {
+	evals, usage := b.Snapshot()
+	return eval.Event{
+		Type: EventUsage, Time: time.Now(), RunID: runID,
+		Detail: map[string]any{
+			"stage":         stage,
+			"evals":         evals,
+			"usage_by_role": usage,
+		},
+	}
 }

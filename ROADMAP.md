@@ -120,11 +120,11 @@ promptopt/                      # Go module（同仓库原地重写，单二进�
 
 **目标**：干预体验成型（吸收旧 M7 的高价值部分，提前到此）。
 
-- [ ] Pareto 前沿看板（候选对比、支配关系、per-example 热力）
-- [ ] 预算仪表（token/评估次数实时消耗）
-- [ ] trace 浏览器 + 候选 diff（side-by-side）+ run 对比
-- [ ] 检查点干预完整化（候选采纳/拒绝、合成集修订）
-- [ ] markdown / html 报告导出
+- [x] Pareto 前沿看板（候选对比、支配关系、per-example 热力）
+- [x] 预算仪表（token/评估次数实时消耗）
+- [x] trace 浏览器 + 候选 diff（side-by-side）+ run 对比
+- [x] 检查点干预完整化（候选采纳/拒绝、合成集修订）
+- [x] markdown / html 报告导出
 
 **验收**：不看终端即可完成一次"输入提示词→审数据→盯优化→采纳候选"全流程。
 

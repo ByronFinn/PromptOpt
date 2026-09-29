@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -22,6 +24,10 @@ type ReportInputs struct {
 	Task    core.Task
 	Lineage *Lineage
 	Result  Result
+	// SampleIDs is the retained evaluation set in its fixed order; it
+	// is the sole data source of frontier.json's sample_ids column
+	// header, keeping Member.Scores alignment explicit on disk.
+	SampleIDs []string
 	// Constraint is "json_validator" when declared, else "".
 	Constraint string
 	// OptBudgetTokens is the optimizer-side valve setting (0 =
@@ -32,18 +38,24 @@ type ReportInputs struct {
 	BaselineGaps int
 }
 
-// memberView is one frontier member as rendered in frontier.json.
-type memberView struct {
+// FrontierMember is one frontier member as rendered in frontier.json.
+type FrontierMember struct {
 	ID          string  `json:"id"`
 	Round       int     `json:"round"`
 	Operator    string  `json:"operator"`
 	PrimaryMean float64 `json:"primary_mean"`
 	JSONRate    float64 `json:"json_valid_rate,omitempty"`
 	Wins        int     `json:"wins"`
+	// Scores is the per-sample primary row over the retained set in
+	// sample_ids order; Prompt mirrors the candidate for self-contained
+	// downstream tooling (diff, adopt).
+	Scores []float64 `json:"scores,omitempty"`
+	Prompt string    `json:"prompt,omitempty"`
 }
 
-// bestView is the deliverable candidate as rendered in frontier.json.
-type bestView struct {
+// FrontierBest is the deliverable candidate as rendered in
+// frontier.json.
+type FrontierBest struct {
 	ID                  string             `json:"id"`
 	ConstraintSatisfied bool               `json:"constraint_satisfied"`
 	Note                string             `json:"note,omitempty"`
@@ -51,14 +63,34 @@ type bestView struct {
 	Prompt              string             `json:"prompt"`
 }
 
-// frontierFile is frontier.json: the terminal frontier plus the best
-// pick and per-member views.
-type frontierFile struct {
-	Primary     string       `json:"primary"`
-	Constraint  string       `json:"constraint,omitempty"`
-	Best        bestView     `json:"best"`
-	Members     []memberView `json:"members"`
-	GeneratedAt time.Time    `json:"generated_at"`
+// FrontierFile is frontier.json: the terminal frontier plus the best
+// pick and per-member views. SampleIDs/Rounds/Reason/UsageByRole and
+// the member Scores/Prompt extensions are additive; artifacts written
+// before they existed decode with zero values and the dashboard
+// degrades instead of failing.
+type FrontierFile struct {
+	Primary     string                   `json:"primary"`
+	Constraint  string                   `json:"constraint,omitempty"`
+	Best        FrontierBest             `json:"best"`
+	Members     []FrontierMember         `json:"members"`
+	SampleIDs   []string                 `json:"sample_ids,omitempty"`
+	Rounds      int                      `json:"rounds,omitempty"`
+	Reason      string                   `json:"reason,omitempty"`
+	UsageByRole map[core.Role]core.Usage `json:"usage_by_role,omitempty"`
+	GeneratedAt time.Time                `json:"generated_at"`
+}
+
+// LoadFrontier decodes runs/<id>/frontier.json.
+func LoadFrontier(runDir string) (FrontierFile, error) {
+	b, err := os.ReadFile(filepath.Join(runDir, fileFrontier))
+	if err != nil {
+		return FrontierFile{}, err
+	}
+	var f FrontierFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		return FrontierFile{}, fmt.Errorf("decode %s: %w", fileFrontier, err)
+	}
+	return f, nil
 }
 
 // WriteOutputs renders frontier.json and report.md under runDir. It is
@@ -70,25 +102,30 @@ func WriteOutputs(runDir string, in ReportInputs, f *Frontier) error {
 	best, satisfied, note := f.Best(primary, constraint)
 
 	members := f.Members()
-	views := make([]memberView, 0, len(members))
+	views := make([]FrontierMember, 0, len(members))
 	for _, m := range members {
-		view := memberView{
+		view := FrontierMember{
 			ID: m.ID(), Round: m.Round, Operator: m.Operator,
 			PrimaryMean: m.Means[primary], Wins: f.Wins(m.ID()),
+			Scores: m.Scores, Prompt: m.Candidate.Prompt,
 		}
 		if constraint == "json_validator" {
 			view.JSONRate = m.Means[constraint]
 		}
 		views = append(views, view)
 	}
-	if err := saveJSON(filepath.Join(runDir, fileFrontier), frontierFile{
+	if err := saveJSON(filepath.Join(runDir, fileFrontier), FrontierFile{
 		Primary:    primary,
 		Constraint: constraint,
-		Best: bestView{
+		Best: FrontierBest{
 			ID: best.ID(), ConstraintSatisfied: satisfied, Note: note,
 			Means: best.Means, Prompt: best.Candidate.Prompt,
 		},
 		Members:     views,
+		SampleIDs:   in.SampleIDs,
+		Rounds:      in.Result.Rounds,
+		Reason:      in.Result.Reason,
+		UsageByRole: in.Result.Usage,
 		GeneratedAt: time.Now().UTC(),
 	}); err != nil {
 		return fmt.Errorf("write frontier.json: %w", err)
@@ -102,7 +139,7 @@ func WriteOutputs(runDir string, in ReportInputs, f *Frontier) error {
 // renderReport produces the Chinese run report: overview (rounds,
 // stop reason, per-role budget, optimizer valve), the Top-1 prompt,
 // the frontier table, the trade-off notes and the lineage summary.
-func renderReport(in ReportInputs, f *Frontier, views []memberView, best Member, satisfied bool, note string) string {
+func renderReport(in ReportInputs, f *Frontier, views []FrontierMember, best Member, satisfied bool, note string) string {
 	primary := in.Task.Primary()
 	res := in.Result
 	var b strings.Builder

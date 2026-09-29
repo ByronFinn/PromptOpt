@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>优化报告 {{.ID}} · PromptOpt</title>
+<link rel="icon" href="data:,">
+<style>
+ :root{--fg:#1f2328;--dim:#6e7781;--line:#d8dee4;--bg:#f6f8fa;--card:#fff;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700}
+ *{box-sizing:border-box}
+ body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;margin:0;padding:2rem 1.25rem;background:var(--bg);color:var(--fg);line-height:1.6}
+ main{max-width:52rem;margin:0 auto}
+ h1{font-size:1.25rem;margin:0 0 .25rem}
+ h2{font-size:1rem;margin:1.5rem 0 .5rem}
+ .sub{color:var(--dim);font-size:.85rem;margin:0 0 1rem}
+ a{color:#0969da;text-decoration:none}
+ a:hover{text-decoration:underline}
+ .dl{display:flex;gap:.75rem;margin:.75rem 0}
+ .dl a{display:inline-block;padding:.3rem .9rem;border:1px solid var(--line);border-radius:.4rem;background:var(--card);font-size:.85rem}
+ .dl a:hover{background:var(--bg);text-decoration:none}
+ article{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1.25rem 1.75rem}
+ article h1{font-size:1.2rem;margin:.5rem 0}
+ article h2{font-size:1rem;border-bottom:1px solid var(--line);padding-bottom:.25rem}
+ article table{border-collapse:collapse;width:100%;font-size:.85rem;margin:.75rem 0}
+ article th,td{padding:.35rem .6rem;border:1px solid var(--line);text-align:left}
+ article th{background:var(--bg)}
+ article pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:.4rem;padding:.6rem .8rem;font-size:.8rem;overflow:auto}
+ article p{white-space:pre-wrap}
+ article ul{padding-left:1.4rem}
+ .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.78rem}
+</style>
+</head>
+<body>
+<main>
+<h1>优化报告 <span class="mono">{{.ID}}</span></h1>
+<p class="sub"><a href="/">run 列表</a> · <a href="/runs/{{.ID}}">run 详情</a> · <a href="/runs/{{.ID}}/frontier">前沿看板</a></p>
+<div class="dl">
+  <a href="/runs/{{.ID}}/report.md" download>下载 report.md</a>
+  <a href="/runs/{{.ID}}/report.html" download>下载自包含 HTML</a>
+</div>
+<article>
+{{.Body}}
+</article>
+</main>
+</body>
+</html>

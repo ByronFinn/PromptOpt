@@ -303,7 +303,7 @@ func TestGepaGoldenLoop(t *testing.T) {
 	}
 
 	// frontier.json: best is g03; only g03 remains.
-	var frontier frontierFile
+	var frontier FrontierFile
 	loadJSON(t, filepath.Join(dir, "frontier.json"), &frontier)
 	if frontier.Best.ID != "g03" || frontier.Primary != "exact_match" {
 		t.Errorf("frontier.json best = %+v", frontier.Best)
@@ -365,7 +365,7 @@ func assertArtifactDeterminism(t *testing.T, dirA, dirB string) {
 		t.Errorf("lineage.json diverged across same-seed runs:\nA: %s\nB: %s", truncateForLog(linA), truncateForLog(linB))
 	}
 
-	var fA, fB frontierFile
+	var fA, fB FrontierFile
 	loadJSON(t, filepath.Join(dirA, "frontier.json"), &fA)
 	loadJSON(t, filepath.Join(dirB, "frontier.json"), &fB)
 	fA.GeneratedAt, fB.GeneratedAt = time.Time{}, time.Time{}

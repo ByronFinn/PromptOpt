@@ -62,7 +62,7 @@ PromptOpt/
 - **遵守 [JetBrains go-modern-guidelines](https://github.com/JetBrains/go-modern-guidelines)**：按 go.mod 版本用现代习语（错误处理、接口设计、并发、slice/map 用法等）
 - **输出约定**: 人类可读输出走 stderr；`--headless` 时 stdout 仅输出 JSON 运行摘要（见 [cmd/promptopt/run.go](cmd/promptopt/run.go)）
 - **退出码契约**: `0` 成功；`1` 评估失败或用法错误；`2` 预算耗尽（优先于 `1`）
-- **命令面**: `run --web` 提供实时 SSE 看板；`serve` 只读浏览历史 run，不暴露实时端点
+- **命令面**: `run --web` 提供实时 SSE 看板，run 结束后看板驻留（可在前沿看板采纳候选）直至 Ctrl-C；`serve` 浏览历史 run 并提供产物干预端点（`POST /runs/{id}/adopt` 写 adopted.json），仍不暴露实时端点
 
 ## 示例项目
 

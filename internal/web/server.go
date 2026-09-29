@@ -137,6 +137,9 @@ type Server struct {
 	// do unlocked read-modify-write cycles, and concurrent htmx
 	// requests (double click, two tabs) must not lose updates.
 	synthMu sync.Mutex
+	// adoptMu serializes adopted.json rewrites for the same reason as
+	// synthMu (double-click adopt / two tabs switching candidates).
+	adoptMu sync.Mutex
 }
 
 // NewServer returns a server rooted at runsDir, with the synthesis
@@ -151,6 +154,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /runs/{id}", s.handleRunDetail)
 	mux.HandleFunc("GET /runs/{id}/events", s.handleRunReplay)
+	mux.HandleFunc("GET /runs/{id}/frontier", s.handleFrontierPage)
+	mux.HandleFunc("POST /runs/{id}/adopt", s.handleAdopt)
+	mux.HandleFunc("GET /runs/{id}/trace", s.handleTracePage)
+	mux.HandleFunc("GET /runs/{id}/diff", s.handleDiffPage)
+	mux.HandleFunc("GET /runs/{id}/report", s.handleReportPage)
+	mux.HandleFunc("GET /runs/{id}/report.md", s.handleReportMarkdown)
+	mux.HandleFunc("GET /runs/{id}/report.html", s.handleReportStandalone)
+	mux.HandleFunc("GET /compare", s.handleComparePage)
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 	s.registerSynthRoutes(mux)
 	if s.bus != nil {
@@ -317,11 +328,166 @@ type runDetail struct {
 	runCard
 	Finished      string
 	FailedSamples []string
-	Usage         []string
 	Samples       []sampleView
+	// Live marks a running run (run --web): the page subscribes /events
+	// for the live budget gauge instead of relying on artifacts only.
+	Live bool
+	// LiveLimits feeds the live gauge's denominators (manifest limits).
+	LiveLimits runManifestLimits
+	// Budget is the terminal budget gauge (usage vs manifest limits);
+	// nil when the run has neither summary nor manifest yet.
+	Budget *budgetGauge
+	// HasFrontier/HasReport gate the optimization-artifact nav links.
+	HasFrontier, HasReport bool
 	// SynthURL links the run's synthesis review page when a synth
 	// tree exists for this id; empty in manual/serve mode.
 	SynthURL string
+}
+
+// budgetRow is one gauge line: a usage figure against its limit.
+type budgetRow struct {
+	Label     string
+	Detail    string // usage detail, e.g. "executor：prompt=20 …"
+	Limit     string // "不限" or the numeric limit
+	Remaining string // headroom under the limit, or "—"
+	Note      string // approximation caveat, "" when exact
+}
+
+// budgetGauge is the run page budget dashboard.
+type budgetGauge struct {
+	Rows []budgetRow
+}
+
+// runManifestLimits is the budget-relevant subset of manifest.json.
+type runManifestLimits struct {
+	BudgetTokens    int64 `json:"budget_tokens"`
+	BudgetEvals     int64 `json:"budget_evals"`
+	BudgetOptTokens int64 `json:"budget_opt_tokens,omitempty"`
+}
+
+// readManifestLimits decodes manifest.json; a missing or malformed
+// artifact means unlimited (zero limits).
+func readManifestLimits(runDir string) runManifestLimits {
+	var m runManifestLimits
+	b, err := os.ReadFile(filepath.Join(runDir, "manifest.json"))
+	if err != nil {
+		return m
+	}
+	_ = json.Unmarshal(b, &m)
+	return m
+}
+
+// usageSnapshot is the minimal decode of one usage event line: the
+// Detail payload of engine.NewUsageEvent.
+type usageSnapshot struct {
+	Detail struct {
+		Evals       int64                    `json:"evals"`
+		UsageByRole map[core.Role]core.Usage `json:"usage_by_role"`
+	} `json:"detail"`
+}
+
+// lastUsageSnapshot scans events.jsonl and returns the final usage
+// event's snapshot. The prefix test skips decoding the (potentially
+// huge) sample_done lines.
+func lastUsageSnapshot(runDir string) (usageSnapshot, bool) {
+	f, err := os.Open(filepath.Join(runDir, "events.jsonl"))
+	if err != nil {
+		return usageSnapshot{}, false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), replayMaxLine)
+	var last usageSnapshot
+	found := false
+	for sc.Scan() {
+		line := sc.Bytes()
+		if !bytes.HasPrefix(line, []byte(`{"type":"usage"`)) {
+			continue
+		}
+		var snap usageSnapshot
+		if err := json.Unmarshal(line, &snap); err != nil {
+			continue
+		}
+		last, found = snap, true
+	}
+	return last, found && sc.Err() == nil
+}
+
+// buildBudgetGauge assembles the terminal gauge: run.json usage by
+// role against the manifest token limits, and consumed evaluations
+// from the last usage snapshot in events.jsonl. Runs predating usage
+// events fall back to the Total−Undispatched approximation (probe
+// consumption of zero-config runs is invisible there — noted).
+func buildBudgetGauge(runDir string, res core.RunResult, hasSummary bool) *budgetGauge {
+	limits := readManifestLimits(runDir)
+	g := &budgetGauge{}
+	if hasSummary {
+		for _, role := range []core.Role{core.RoleExecutor, core.RoleOptimizer} {
+			u, ok := res.UsageByRole[role]
+			if !ok {
+				continue
+			}
+			limit := limits.BudgetTokens
+			if role == core.RoleOptimizer {
+				limit = limits.BudgetOptTokens
+			}
+			g.Rows = append(g.Rows, tokenRow(role, u, limit))
+		}
+	}
+	evals := int64(0)
+	note := ""
+	snap, ok := lastUsageSnapshot(runDir)
+	switch {
+	case ok:
+		evals = snap.Detail.Evals
+	case hasSummary:
+		evals = int64(res.TotalSamples - res.Undispatched)
+		note = "旧 run 无 usage 快照，按 Total−Undispatched 近似（零配置 run 不含探针消耗，偏低）"
+	default:
+		return g
+	}
+	g.Rows = append(g.Rows, evalsRow(evals, limits.BudgetEvals, note))
+	return g
+}
+
+// tokenRow renders one role's usage against its token limit.
+func tokenRow(role core.Role, u core.Usage, limit int64) budgetRow {
+	row := budgetRow{
+		Label:     string(role),
+		Detail:    fmt.Sprintf("%s：prompt=%d completion=%d total=%d", role, u.PromptTokens, u.CompletionTokens, u.Total()),
+		Limit:     "不限",
+		Remaining: "—",
+	}
+	if limit > 0 {
+		row.Limit = fmt.Sprintf("%d", limit)
+		row.Remaining = fmt.Sprintf("%d", max(limit-u.Total(), 0))
+	}
+	return row
+}
+
+// evalsRow renders consumed evaluations against the eval limit.
+func evalsRow(used, limit int64, note string) budgetRow {
+	return budgetRow{
+		Label:     "评估次数",
+		Detail:    fmt.Sprintf("已消耗 %d", used),
+		Limit:     limitText(limit),
+		Remaining: remainingText(limit, used),
+		Note:      note,
+	}
+}
+
+func limitText(limit int64) string {
+	if limit > 0 {
+		return fmt.Sprintf("%d", limit)
+	}
+	return "不限"
+}
+
+func remainingText(limit, used int64) string {
+	if limit > 0 {
+		return fmt.Sprintf("%d", max(limit-used, 0))
+	}
+	return "—"
 }
 
 func (s *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
@@ -335,18 +501,25 @@ func (s *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	d := runDetail{runCard: newRunCard(runDir, id)}
-	if res, ok := readSummary(runDir); ok {
+	d := runDetail{runCard: newRunCard(runDir, id), Live: s.bus != nil}
+	res, hasSummary := readSummary(runDir)
+	if hasSummary {
 		d.Finished = res.FinishedAt.Format("2006-01-02 15:04:05")
 		d.FailedSamples = res.FailedSamples
-		for _, role := range []core.Role{core.RoleExecutor, core.RoleOptimizer} {
-			if u, ok := res.UsageByRole[role]; ok {
-				d.Usage = append(d.Usage, fmt.Sprintf("%s：prompt=%d completion=%d total=%d",
-					role, u.PromptTokens, u.CompletionTokens, u.Total()))
-			}
-		}
+	}
+	if d.Live {
+		d.LiveLimits = readManifestLimits(runDir)
 	}
 	d.Samples = readSampleViews(runDir)
+	if g := buildBudgetGauge(runDir, res, hasSummary); len(g.Rows) > 0 {
+		d.Budget = g
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "frontier.json")); err == nil {
+		d.HasFrontier = true
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "report.md")); err == nil {
+		d.HasReport = true
+	}
 	// Zero-config runs own a synth tree: surface the review page next
 	// to the evaluation artifacts.
 	if s.synthDir != "" {
@@ -428,8 +601,10 @@ func render(w http.ResponseWriter, name string, data any) {
 
 // --- SSE ----------------------------------------------------------------
 
-// handleLiveEvents streams the bus as SSE until the run finishes, the
-// bus closes or the client disconnects.
+// handleLiveEvents streams the bus as SSE until the bus closes or the
+// client disconnects. run_done no longer ends the stream: with --web
+// the dashboard stays up past the terminal event (adopt flow, terminal
+// usage snapshots), and every page's JS closes its own EventSource.
 func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -455,9 +630,6 @@ func (s *Server) handleLiveEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
-			if ev.Type == eval.EventRunDone {
-				return
-			}
 		}
 	}
 }

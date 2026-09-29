@@ -29,6 +29,7 @@ const (
 	EventFrontierUpdated = "frontier_updated"
 	EventVistaRestart    = "vista_restart"
 	EventRoundDone       = "round_done"
+	EventUsage           = "usage"
 )
 
 // Loop-wide tuning constants.
@@ -345,8 +346,15 @@ func (g *gepaRun) run(ctx context.Context) (Result, error) {
 		Reason:              reason,
 		Usage:               usage,
 	}
+	// SampleIDs fixes the column order of Member.Scores on disk (the
+	// row projection follows req.Samples; recordsRow, gepa.go).
+	sampleIDs := make([]string, len(req.Samples))
+	for i, s := range req.Samples {
+		sampleIDs[i] = s.ID
+	}
 	if err := WriteOutputs(req.RunDir, ReportInputs{
 		Task: req.Task, Lineage: lin, Result: res, Constraint: g.constraint,
+		SampleIDs:       sampleIDs,
 		OptBudgetTokens: g.adv.optBudgetTokens, OptValveTripped: g.adv.ValveFired(),
 		BaselineGaps: baselineGaps,
 	}, g.frontier); err != nil {

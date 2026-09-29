@@ -32,13 +32,19 @@
  button:hover{background:var(--bg)}
  #replay-log{font-size:.78rem;max-height:24rem;overflow:auto;margin-top:.75rem}
  #replay-log li{margin:.15rem 0}
+ #opt-log{font-size:.78rem;max-height:18rem;overflow:auto;margin:.5rem 0 0;padding-left:1.4rem}
+ #opt-log li{margin:.15rem 0}
+ .gauge{display:flex;flex-wrap:wrap;gap:.6rem 1.4rem;background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:.6rem .9rem;font-size:.85rem;margin:.5rem 0}
+ .gauge .val{font-family:ui-monospace,Menlo,Consolas,monospace}
  .empty{color:var(--dim);padding:1.25rem;text-align:center;border:1px dashed var(--line);border-radius:.5rem;background:var(--card)}
 </style>
 </head>
 <body data-run-id="{{.ID}}">
 <main>
 <h1><span class="badge {{.StatusClass}}">{{.Status}}</span><span class="mono">{{.ID}}</span></h1>
-<p class="sub"><a href="/">← 返回 run 列表</a>{{if .SynthURL}} · <a href="{{.SynthURL}}">合成集审核（synth artifacts）</a>{{end}}</p>
+<p class="sub">
+  <a href="/">← 返回 run 列表</a>{{if .SynthURL}} · <a href="{{.SynthURL}}">合成集审核</a>{{end}}{{if .HasFrontier}} · <a href="/runs/{{.ID}}/frontier">前沿看板</a>{{end}} · <a href="/runs/{{.ID}}/trace">trace 浏览器</a>{{if .HasReport}} · <a href="/runs/{{.ID}}/report">优化报告</a>{{end}} · <a href="/compare">run 对比</a>
+</p>
 
 <h2>run 摘要</h2>
 {{if .HasSummary}}
@@ -47,12 +53,44 @@
   <tr><th>状态</th><td><span class="{{.StatusClass}}">{{.Status}}</span>（exit {{.ExitCode}}）</td></tr>
   <tr><th>样本</th><td>评估 {{.Evaluated}}/{{.Total}} · 失败 {{.Failed}} · 未派发 {{.Undispatched}}</td></tr>
   {{if .Metrics}}<tr><th>指标均值</th><td class="mono">{{range .Metrics}}{{.Name}}={{.Value}}　{{end}}</td></tr>{{end}}
-  {{if .Usage}}<tr><th>token 用量</th><td class="mono">{{range .Usage}}{{.}}　{{end}}</td></tr>{{end}}
   {{if .FailedSamples}}<tr><th>失败样本</th><td class="bad mono">{{range .FailedSamples}}{{.}} {{end}}</td></tr>{{end}}
   <tr><th>时间</th><td>{{.Started}} → {{.Finished}}</td></tr>
 </table>
 {{else}}
 <div class="empty">该 run 尚未产出 summary.json（未完成或被中断），以下为已落盘的样本 trace。</div>
+{{end}}
+
+<h2>预算仪表{{if .Live}}（终态基线；实时分区见下）{{end}}</h2>
+{{if .Budget}}
+<table>
+  <thead><tr><th>项</th><th>用量</th><th>限额</th><th>余量</th></tr></thead>
+  <tbody>
+  {{range .Budget.Rows}}
+    <tr>
+      <td class="mono">{{.Label}}</td>
+      <td class="mono">{{.Detail}}</td>
+      <td class="mono">{{.Limit}}</td>
+      <td class="mono">{{.Remaining}}{{if .Note}} <span class="dim">（{{.Note}}）</span>{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="empty">无 usage / manifest 数据</div>
+{{end}}
+
+{{if .Live}}
+<h2>实时预算仪表（SSE）</h2>
+<p class="sub">订阅 /events：usage 快照覆盖式校准，其后 sample_done 增量；sample_start 只作行级进度；budget_stop 标记阀门触发。</p>
+<div class="gauge" id="live-gauge" data-tokens-limit="{{.LiveLimits.BudgetTokens}}" data-opt-limit="{{.LiveLimits.BudgetOptTokens}}" data-evals-limit="{{.LiveLimits.BudgetEvals}}">
+  <span>executor tokens <span class="val" id="g-exec">0</span>{{if .LiveLimits.BudgetTokens}} / {{.LiveLimits.BudgetTokens}}{{end}}</span>
+  <span>optimizer tokens <span class="val" id="g-opt">0</span>{{if .LiveLimits.BudgetOptTokens}} / {{.LiveLimits.BudgetOptTokens}}{{end}}</span>
+  <span>评估次数 <span class="val" id="g-evals">0</span>{{if .LiveLimits.BudgetEvals}} / {{.LiveLimits.BudgetEvals}}{{end}}</span>
+  <span id="g-valve" class="warn" hidden>⚠ 预算阀门已触发</span>
+</div>
+
+<h2>优化轮次与事件</h2>
+<ol id="opt-log" class="mono"></ol>
 {{end}}
 
 {{if .Samples}}
@@ -123,5 +161,94 @@ document.getElementById('replay-btn').addEventListener('click', () => {
   };
 });
 </script>
+{{if .Live}}
+<script>
+(function(){
+  // Live budget gauge: the latest usage snapshot is authoritative
+  // (覆盖式校准 — it also covers probe-window and failed-sample usage
+  // that sample_done never carries); sample_done events increment on
+  // top of it until the next snapshot replaces the base.
+  let snapEvals = 0, snapExec = 0, snapOpt = 0;
+  let incEvals = 0, incExec = 0, incOpt = 0;
+  let valve = false, doneSeen = false;
+  const el = id => document.getElementById(id);
+  function render(){
+    el('g-exec').textContent = snapExec + incExec;
+    el('g-opt').textContent = snapOpt + incOpt;
+    el('g-evals').textContent = snapEvals + incEvals;
+    el('g-valve').hidden = !valve;
+  }
+  function logOpt(text){
+    const log = el('opt-log');
+    const li = document.createElement('li');
+    li.textContent = text;
+    log.appendChild(li);
+    if (log.children.length > 500) log.removeChild(log.firstChild);
+  }
+  function roleTotal(u){ return u ? (u.prompt_tokens + u.completion_tokens) : 0; }
+  const es = new EventSource('/events');
+  es.onmessage = e => {
+    const ev = JSON.parse(e.data);
+    const d = ev.detail || {};
+    switch (ev.type) {
+      case 'usage': {
+        snapEvals = d.evals || 0;
+        const roles = d.usage_by_role || {};
+        snapExec = roleTotal(roles.executor);
+        snapOpt = roleTotal(roles.optimizer);
+        incEvals = incExec = incOpt = 0;
+        break;
+      }
+      case 'sample_done':
+        if (ev.usage) {
+          incEvals++;
+          incExec += ev.usage.prompt_tokens + ev.usage.completion_tokens;
+        }
+        break;
+      case 'budget_stop':
+        valve = true;
+        logOpt((d.role ? '[' + d.role + '] ' : '') + '预算阀门触发：停止派发新样本');
+        break;
+      case 'round_start':
+        logOpt('第 ' + d.round + ' 轮开始');
+        break;
+      case 'reflect_done':
+        logOpt('第 ' + d.round + ' 轮反思完成：' + d.hypotheses + ' 条假设');
+        break;
+      case 'hypotheses_validated':
+        logOpt('第 ' + d.round + ' 轮假设验证：选中 ' + d.selected_hypothesis + '（' + d.mode + '，lift ' + d.lift + '）');
+        break;
+      case 'mutate_done':
+        logOpt('第 ' + d.round + ' 轮突变：' + d.operator + ' → ' + d.candidate);
+        break;
+      case 'frontier_updated':
+        logOpt('前沿更新：' + d.candidate + (d.admitted ? ' 准入（淘汰 ' + (d.evicted ? d.evicted.length : 0) + '）' : (d.incomplete ? ' 评估不完整未准入' : ' 未准入')));
+        break;
+      case 'vista_restart':
+        logOpt('VISTA 重启：连续 ' + d.stagnant + ' 轮无改进');
+        break;
+      case 'round_done':
+        if (d.skipped) logOpt('第 ' + d.round + ' 轮跳过（' + (d.error || '') + '）');
+        else logOpt('第 ' + d.round + ' 轮结束：' + d.candidate + (d.admitted ? ' 准入' : ' 未准入') + '，主指标均值 ' + d.primary_mean);
+        break;
+      case 'candidate_adopted':
+        logOpt('已采纳候选 ' + d.candidate);
+        break;
+      case 'run_done':
+        doneSeen = true;
+        logOpt('run 结束：' + ev.status + '（exit ' + ev.exit_code + '）· 看板驻留至 Ctrl-C');
+        break;
+    }
+    render();
+  };
+  es.onerror = () => {
+    // The stream ends when the process tears the bus down (Ctrl-C).
+    // After run_done that is expected: stop retrying.
+    if (doneSeen) es.close();
+  };
+  render();
+})();
+</script>
+{{end}}
 </body>
 </html>
