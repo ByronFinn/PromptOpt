@@ -440,10 +440,7 @@ func TestComparePage(t *testing.T) {
 		"—", // B has no frontier: Top-1 dash
 	} {
 		if !strings.Contains(res.Body, want) {
-			start := strings.Index(res.Body, "指标均值")
-			if start < 0 {
-				start = 0
-			}
+			start := max(strings.Index(res.Body, "指标均值"), 0)
 			t.Errorf("compare page missing %q; metrics section: %s", want, res.Body[start:min(start+700, len(res.Body))])
 		}
 	}
