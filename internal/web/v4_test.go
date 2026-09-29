@@ -434,13 +434,17 @@ func TestComparePage(t *testing.T) {
 		t.Fatalf("compare = %d: %s", res.StatusCode, res.Body)
 	}
 	for _, want := range []string{
-		"0.5000", "0.7500", "&#43;0.2500", // metric cells and Δ (htmlEscaper encodes the plus sign)
+		"0.5000", "0.7500", "0.2500", // metric cells and Δ (sign form asserted separately below)
 		"160", "100", // per-role token totals
 		idA, idB, // selects carry both runs
 		"—", // B has no frontier: Top-1 dash
 	} {
 		if !strings.Contains(res.Body, want) {
-			t.Errorf("compare page missing %q", want)
+			start := strings.Index(res.Body, "指标均值")
+			if start < 0 {
+				start = 0
+			}
+			t.Errorf("compare page missing %q; metrics section: %s", want, res.Body[start:min(start+700, len(res.Body))])
 		}
 	}
 	if strings.Contains(res.Body, "两侧均无 frontier") {
@@ -451,6 +455,17 @@ func TestComparePage(t *testing.T) {
 	res = get(t, mustURL(t, NewServer(t.TempDir(), "", nil).Handler(), "/compare"))
 	if res.StatusCode != http.StatusOK || !strings.Contains(res.Body, "暂无历史 run") {
 		t.Errorf("empty compare = %d: %s", res.StatusCode, truncateBody(res.Body))
+	}
+}
+
+// TestDeltaOrDash pins the Δ formatter independently of the template
+// pipeline (html/template encodes a leading plus sign as &#43;).
+func TestDeltaOrDash(t *testing.T) {
+	if got := deltaOrDash(true, true, 0.25); got != "+0.2500" {
+		t.Errorf("deltaOrDash(true,true,0.25) = %q", got)
+	}
+	if got := deltaOrDash(true, false, 0.25); got != "—" {
+		t.Errorf("deltaOrDash(true,false,·) = %q, want dash", got)
 	}
 }
 
