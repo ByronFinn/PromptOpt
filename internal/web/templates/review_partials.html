@@ -1,0 +1,39 @@
+{{define "review_rows"}}
+<tbody id="review-rows">
+  {{range .Rows}}
+  <tr>
+    <td class="mono">{{.ID}}</td>
+    <td class="mono">{{.Split}}</td>
+    <td><span class="{{.VerdictClass}}">{{.VerdictLabel}}</span><br><span class="mono dim">{{.Verdict}}</span></td>
+    <td class="mono">{{.Variance}}</td>
+    <td class="mono">{{.Scores}}</td>
+    <td><input name="split" value="{{.Split}}" aria-label="split"></td>
+    <td><textarea name="input" aria-label="input">{{.Input}}</textarea></td>
+    <td><textarea name="expected" class="mono" aria-label="expected">{{.Expected}}</textarea></td>
+    <td>
+      <button hx-post="/synth/{{$.ID}}/samples/{{.ID}}" hx-include="closest tr" hx-target="#review-rows" hx-swap="outerHTML">保存</button>
+      <button hx-delete="/synth/{{$.ID}}/samples/{{.ID}}" hx-confirm="删除样本 {{.ID}}？" hx-target="#review-rows" hx-swap="outerHTML">删除</button>
+    </td>
+  </tr>
+  {{else}}
+  <tr><td colspan="9" class="dim" style="text-align:center">无样本</td></tr>
+  {{end}}
+</tbody>
+{{end}}
+
+{{define "review_status"}}
+<div id="checkpoint-status"
+  {{if eq .Status "pending"}}hx-get="/synth/{{.ID}}/status" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+  {{if eq .Status "pending"}}
+    <span class="badge warn">等待审核</span>
+    <span class="dim">编辑上表后批准即生效（也可直接编辑 checkpoint.json）；批准后 baseline 评估将继续。</span>
+    <button class="primary" hx-post="/synth/{{.ID}}/approve" hx-target="#checkpoint-status" hx-swap="outerHTML">批准并继续</button>
+  {{else if eq .Status "approved"}}
+    <span class="badge ok">已批准</span>
+    <span class="dim">检查点已放行，baseline 评估继续进行。</span>
+  {{else}}
+    <span class="badge">未到检查点</span>
+    <span class="dim">合成或方差过滤尚未完成。</span>
+  {{end}}
+</div>
+{{end}}

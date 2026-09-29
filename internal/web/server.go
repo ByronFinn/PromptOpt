@@ -32,6 +32,9 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
+//go:embed static/*
+var staticFS embed.FS
+
 // templates are parsed once; they are read-only afterwards.
 var templates = template.Must(template.ParseFS(templateFS, "templates/*.html"))
 
@@ -123,15 +126,23 @@ func (b *Bus) subscribers() int {
 }
 
 // Server renders the dashboard pages and endpoints. A nil bus turns
-// the live endpoints off (serve mode: history and replay only).
+// the live endpoints off (serve mode: history and replay only); an
+// empty synthDir unmounts the synthesis review tree (runs without a
+// Harness Builder phase).
 type Server struct {
-	runsDir string
-	bus     *Bus
+	runsDir  string
+	synthDir string
+	bus      *Bus
+	// synthMu serializes synthesis artifact mutations: review handlers
+	// do unlocked read-modify-write cycles, and concurrent htmx
+	// requests (double click, two tabs) must not lose updates.
+	synthMu sync.Mutex
 }
 
-// NewServer returns a server rooted at runsDir; bus may be nil.
-func NewServer(runsDir string, bus *Bus) *Server {
-	return &Server{runsDir: runsDir, bus: bus}
+// NewServer returns a server rooted at runsDir, with the synthesis
+// review endpoints mounted when synthDir is non-empty; bus may be nil.
+func NewServer(runsDir, synthDir string, bus *Bus) *Server {
+	return &Server{runsDir: runsDir, synthDir: synthDir, bus: bus}
 }
 
 // Handler returns the routed HTTP handler.
@@ -140,6 +151,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /runs/{id}", s.handleRunDetail)
 	mux.HandleFunc("GET /runs/{id}/events", s.handleRunReplay)
+	mux.Handle("GET /static/", http.FileServerFS(staticFS))
+	s.registerSynthRoutes(mux)
 	if s.bus != nil {
 		mux.HandleFunc("GET /events", s.handleLiveEvents)
 	}
@@ -306,6 +319,9 @@ type runDetail struct {
 	FailedSamples []string
 	Usage         []string
 	Samples       []sampleView
+	// SynthURL links the run's synthesis review page when a synth
+	// tree exists for this id; empty in manual/serve mode.
+	SynthURL string
 }
 
 func (s *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
@@ -331,6 +347,13 @@ func (s *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	d.Samples = readSampleViews(runDir)
+	// Zero-config runs own a synth tree: surface the review page next
+	// to the evaluation artifacts.
+	if s.synthDir != "" {
+		if _, err := os.Stat(filepath.Join(s.synthDir, id, "manifest.json")); err == nil {
+			d.SynthURL = "/synth/" + id
+		}
+	}
 	render(w, "run.html", d)
 }
 

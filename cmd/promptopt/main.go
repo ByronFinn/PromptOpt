@@ -107,7 +107,9 @@ func serveCommand(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	fmt.Fprintf(os.Stderr, "promptopt serve: http://%s (runs: %s)\n", *addr, *runsDir)
-	if err := web.NewServer(*runsDir, nil).ListenAndServe(ctx, *addr); err != nil {
+	// serve stays read-only: an empty synth dir keeps the synthesis
+	// review tree unmounted.
+	if err := web.NewServer(*runsDir, "", nil).ListenAndServe(ctx, *addr); err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt serve: %v\n", err)
 		return exitFailure
 	}

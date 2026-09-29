@@ -8,14 +8,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ByronFinn/PromptOpt/internal/core"
 	"github.com/ByronFinn/PromptOpt/internal/eval"
+	"github.com/ByronFinn/PromptOpt/internal/harness"
 	"github.com/ByronFinn/PromptOpt/internal/provider"
 )
 
@@ -139,7 +142,7 @@ func TestIndexListsRunCards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ts := httptest.NewServer(NewServer(runsDir, nil).Handler())
+	ts := httptest.NewServer(NewServer(runsDir, "", nil).Handler())
 	defer ts.Close()
 
 	res := get(t, ts.URL+"/")
@@ -168,12 +171,12 @@ func TestIndexListsRunCards(t *testing.T) {
 func TestIndexEmptyAndLiveModes(t *testing.T) {
 	runsDir := t.TempDir()
 
-	plain := get(t, mustURL(t, NewServer(runsDir, nil).Handler(), "/"))
+	plain := get(t, mustURL(t, NewServer(runsDir, "", nil).Handler(), "/"))
 	if !strings.Contains(plain.Body, "暂无历史 run") {
 		t.Errorf("empty index missing empty state: %q", plain.Body)
 	}
 
-	live := get(t, mustURL(t, NewServer(runsDir, NewBus()).Handler(), "/"))
+	live := get(t, mustURL(t, NewServer(runsDir, "", NewBus()).Handler(), "/"))
 	for _, want := range []string{"实时事件流", "EventSource('/events')"} {
 		if !strings.Contains(live.Body, want) {
 			t.Errorf("live index missing %q", want)
@@ -209,7 +212,7 @@ func TestRunDetailPage(t *testing.T) {
 		Error:     "provider 500", Usage: core.Usage{PromptTokens: 10, CompletionTokens: 5},
 	})
 
-	h := NewServer(runsDir, nil).Handler()
+	h := NewServer(runsDir, "", nil).Handler()
 	res := get(t, mustURL(t, h, "/runs/"+runID))
 	for _, want := range []string{
 		"（exit 1）", "s1", "s2", "json_validator=1.0000",
@@ -256,7 +259,7 @@ func (fakeProvider) Chat(context.Context, provider.ChatRequest) (provider.ChatRe
 // into the SSE endpoint and asserts the streamed event sequence.
 func TestLiveSSEWiredToEngine(t *testing.T) {
 	bus := NewBus()
-	ts := httptest.NewServer(NewServer(t.TempDir(), bus).Handler())
+	ts := httptest.NewServer(NewServer(t.TempDir(), "", bus).Handler())
 	defer ts.Close()
 
 	payloads := make(chan []string, 1)
@@ -338,7 +341,7 @@ func TestLiveSSEWiredToEngine(t *testing.T) {
 // asserts the subscriber is removed from the bus.
 func TestSSEClientDisconnectCleansUp(t *testing.T) {
 	bus := NewBus()
-	ts := httptest.NewServer(NewServer(t.TempDir(), bus).Handler())
+	ts := httptest.NewServer(NewServer(t.TempDir(), "", bus).Handler())
 	defer ts.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -363,7 +366,7 @@ func TestSSEClientDisconnectCleansUp(t *testing.T) {
 
 // TestServeModeHasNoLiveEndpoint pins the read-only contract of serve.
 func TestServeModeHasNoLiveEndpoint(t *testing.T) {
-	h := NewServer(t.TempDir(), nil).Handler()
+	h := NewServer(t.TempDir(), "", nil).Handler()
 	if res := get(t, mustURL(t, h, "/events")); res.StatusCode != http.StatusNotFound {
 		t.Errorf("/events in serve mode = %d, want 404", res.StatusCode)
 	}
@@ -395,7 +398,7 @@ func TestEventsReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := NewServer(runsDir, nil).Handler()
+	h := NewServer(runsDir, "", nil).Handler()
 	res := get(t, mustURL(t, h, "/runs/"+runID+"/events"))
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d", res.StatusCode)
@@ -519,7 +522,7 @@ func TestEventsReplayLargeLines(t *testing.T) {
 		`{"type":"sample_done","response":"`+big+`"}`,
 		`{"type":"run_done","status":"completed","exit_code":0}`)
 
-	h := NewServer(runsDir, nil).Handler()
+	h := NewServer(runsDir, "", nil).Handler()
 	res := get(t, mustURL(t, h, "/runs/"+runID+"/events"))
 	data := dataLines(res.Body)
 	if len(data) != 3 {
@@ -544,7 +547,7 @@ func TestEventsReplayReportsTruncation(t *testing.T) {
 		`{"type":"sample_done","response":"`+huge+`"}`,
 		`{"type":"run_done","status":"completed"}`)
 
-	h := NewServer(runsDir, nil).Handler()
+	h := NewServer(runsDir, "", nil).Handler()
 	res := get(t, mustURL(t, h, "/runs/"+runID+"/events"))
 	data := dataLines(res.Body)
 	if len(data) != 2 {
@@ -568,5 +571,340 @@ func writeReplayRaw(t *testing.T, runsDir, runID string, lines ...string) {
 	if err := os.WriteFile(filepath.Join(runsDir, runID, "events.jsonl"),
 		[]byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// --- synthesis review ------------------------------------------------------
+
+// writeSynthFixture writes a complete synth/<id>/ artifact tree: a
+// two-sample jiuwei-tcm 证候判断 task with a one-variant filter report
+// and a pending interactive checkpoint.
+func writeSynthFixture(t *testing.T, synthRoot, id string) {
+	t.Helper()
+	dir := filepath.Join(synthRoot, id)
+	if err := harness.SaveManifest(dir, harness.Manifest{
+		Prompt: "从中医医案文本判断证候", Model: "jiuwei-tcm",
+		SynthSamples: 2, ProbeVariants: 1,
+		CreatedAt: time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.SaveSpec(dir, harness.SpecFile{
+		Task: core.Task{
+			Name: "tcm_zhenghou", Description: "判断证候",
+			PromptTemplate: "判断证候：{input}", Metrics: []string{"exact_match"},
+		},
+		Probes: []string{"变体甲：{input}"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.SaveSamples(dir, harness.SampleFile{Samples: []core.Sample{
+		{ID: "s1", Input: "恶寒发热，无汗。", Expected: "风寒束表", Split: "train"},
+		{ID: "s2", Input: "心烦不寐。", Expected: map[string]any{"证候": "心肾不交"}, Split: "dev"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.SaveFilterReport(dir, harness.FilterReport{
+		Variants: 1, Primary: "exact_match", Thresholds: harness.DefaultThresholds(),
+		PerSample: []harness.SampleVerdict{
+			{ID: "s1", Scores: []float64{1}, Variance: 0, Verdict: harness.VerdictDeadEasy},
+			{ID: "s2", Scores: []float64{0.5}, Variance: 0, Verdict: harness.VerdictKeep},
+		},
+		Kept: 1, DroppedByVerdict: map[harness.Verdict]int{harness.VerdictDeadEasy: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.SaveCheckpoint(dir, harness.CheckpointState{
+		Status: harness.CheckpointPending, Mode: harness.ModeInteractive, UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSynthReviewPage(t *testing.T) {
+	synthRoot := t.TempDir()
+	writeSynthFixture(t, synthRoot, "20260929-100000-a")
+	h := NewServer(t.TempDir(), synthRoot, nil).Handler()
+
+	res := get(t, mustURL(t, h, "/synth/20260929-100000-a"))
+	for _, want := range []string{
+		"合成集审核", "tcm_zhenghou", "判断证候：{input}", "变体甲：{input}",
+		"s1", "s2", "死样本·全对", "保留", "风寒束表", "0.5000",
+		"等待审核", "批准并继续", "every 2s", "htmx.min.js",
+	} {
+		if !strings.Contains(res.Body, want) {
+			t.Errorf("review page missing %q", want)
+		}
+	}
+	if res := get(t, mustURL(t, h, "/synth/no-such-run")); res.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown synth id status = %d, want 404", res.StatusCode)
+	}
+}
+
+func TestSynthEditSampleRoundTrip(t *testing.T) {
+	synthRoot := t.TempDir()
+	writeSynthFixture(t, synthRoot, "20260929-100000-b")
+	h := NewServer(t.TempDir(), synthRoot, nil).Handler()
+
+	form := url.Values{
+		"input":    {"五心烦热，潮热盗汗。"},
+		"expected": {`{"证候": "阴虚火旺"}`},
+		"split":    {"train"},
+	}
+	res := postForm(t, h, "/synth/20260929-100000-b/samples/s1", form)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("edit status = %d: %s", res.StatusCode, res.Body)
+	}
+	if !strings.Contains(res.Body, "潮热盗汗") {
+		t.Errorf("rows partial missing the edited input: %.300s", res.Body)
+	}
+	sf, err := harness.LoadSamples(filepath.Join(synthRoot, "20260929-100000-b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sf.Samples[0]; got.Input != "五心烦热，潮热盗汗。" || got.Split != "train" {
+		t.Errorf("edited sample = %+v", got)
+	}
+	if m, ok := sf.Samples[0].Expected.(map[string]any); !ok || m["证候"] != "阴虚火旺" {
+		t.Errorf("edited expected = %#v", sf.Samples[0].Expected)
+	}
+}
+
+func TestSynthEditSampleRejectsInvalidExpected(t *testing.T) {
+	synthRoot := t.TempDir()
+	id := "20260929-100000-c"
+	writeSynthFixture(t, synthRoot, id)
+	h := NewServer(t.TempDir(), synthRoot, nil).Handler()
+
+	before, err := os.ReadFile(filepath.Join(synthRoot, id, "samples.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, expected := range map[string]string{"not json": "不是 JSON", "bare number": "42", "empty": ""} {
+		form := url.Values{"input": {"x"}, "expected": {expected}, "split": {"train"}}
+		if res := postForm(t, h, "/synth/"+id+"/samples/s1", form); res.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status = %d, want 422", name, res.StatusCode)
+		}
+	}
+	after, err := os.ReadFile(filepath.Join(synthRoot, id, "samples.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Error("samples.json changed despite the 422s")
+	}
+}
+
+func TestSynthEditSampleRejectsInvalidSplit(t *testing.T) {
+	synthRoot := t.TempDir()
+	writeSynthFixture(t, synthRoot, "20260929-100000-d")
+	h := NewServer(t.TempDir(), synthRoot, nil).Handler()
+
+	form := url.Values{"input": {"x"}, "expected": {`"y"`}, "split": {"moon"}}
+	if res := postForm(t, h, "/synth/20260929-100000-d/samples/s1", form); res.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("invalid split status = %d, want 422", res.StatusCode)
+	}
+}
+
+func TestSynthDeleteSample(t *testing.T) {
+	synthRoot := t.TempDir()
+	writeSynthFixture(t, synthRoot, "20260929-100000-e")
+	h := NewServer(t.TempDir(), synthRoot, nil).Handler()
+
+	res := doMethod(t, http.MethodDelete, mustURL(t, h, "/synth/20260929-100000-e/samples/s2"))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("delete status = %d: %s", res.StatusCode, res.Body)
+	}
+	if strings.Contains(res.Body, "心烦不寐") {
+		t.Errorf("rows partial still shows the deleted sample: %.300s", res.Body)
+	}
+	sf, err := harness.LoadSamples(filepath.Join(synthRoot, "20260929-100000-e"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sf.Samples) != 1 || sf.Samples[0].ID != "s1" {
+		t.Errorf("samples.json after delete = %+v", sf.Samples)
+	}
+}
+
+func TestSynthApproveIsIdempotent(t *testing.T) {
+	synthRoot := t.TempDir()
+	writeSynthFixture(t, synthRoot, "20260929-100000-f")
+	h := NewServer(t.TempDir(), synthRoot, nil).Handler()
+
+	for i := range 2 {
+		res := postForm(t, h, "/synth/20260929-100000-f/approve", url.Values{})
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("approve #%d status = %d: %s", i+1, res.StatusCode, res.Body)
+		}
+		if !strings.Contains(res.Body, "已批准") {
+			t.Errorf("approve #%d partial missing the approved badge: %.300s", i+1, res.Body)
+		}
+		if strings.Contains(res.Body, "every 2s") {
+			t.Errorf("approve #%d partial still polls", i+1)
+		}
+	}
+	st, err := harness.LoadCheckpoint(filepath.Join(synthRoot, "20260929-100000-f"))
+	if err != nil || st.Status != harness.CheckpointApproved {
+		t.Errorf("checkpoint = %+v (%v), want approved", st, err)
+	}
+}
+
+// TestSynthConcurrentEditsSerialize pins the review write lock: htmx
+// double clicks and multi-tab edits arrive as concurrent read-modify-
+// write requests, which must serialize (all 200, artifact intact)
+// instead of losing updates or failing on a shared temp name.
+func TestSynthConcurrentEditsSerialize(t *testing.T) {
+	synthRoot := t.TempDir()
+	writeSynthFixture(t, synthRoot, "20260929-100000-h")
+	ts := httptest.NewServer(NewServer(t.TempDir(), synthRoot, nil).Handler())
+	t.Cleanup(ts.Close)
+
+	var wg sync.WaitGroup
+	codes := make([]int, 16)
+	for i := range 16 {
+		wg.Go(func() {
+			form := url.Values{
+				"input":    {fmt.Sprintf("并发编辑 %d", i)},
+				"expected": {`"风寒束表"`},
+				"split":    {"train"},
+			}
+			req, err := http.NewRequest(http.MethodPost,
+				ts.URL+"/synth/20260929-100000-h/samples/s1", strings.NewReader(form.Encode()))
+			if err != nil {
+				t.Errorf("request %d: %v", i, err)
+				return
+			}
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			res, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Errorf("request %d: %v", i, err)
+				return
+			}
+			res.Body.Close()
+			codes[i] = res.StatusCode
+		})
+	}
+	wg.Wait()
+	for i, code := range codes {
+		if code != http.StatusOK {
+			t.Errorf("edit %d status = %d, want 200 (writes must serialize, not fail)", i, code)
+		}
+	}
+	sf, err := harness.LoadSamples(filepath.Join(synthRoot, "20260929-100000-h"))
+	if err != nil {
+		t.Fatalf("samples.json after concurrent edits: %v", err)
+	}
+	if !strings.HasPrefix(sf.Samples[0].Input, "并发编辑") {
+		t.Errorf("final input = %q, want one of the concurrent edits", sf.Samples[0].Input)
+	}
+}
+
+func TestSynthStatusPartialReflectsGate(t *testing.T) {
+	synthRoot := t.TempDir()
+	writeSynthFixture(t, synthRoot, "20260929-100000-g")
+	h := NewServer(t.TempDir(), synthRoot, nil).Handler()
+
+	pending := get(t, mustURL(t, h, "/synth/20260929-100000-g/status"))
+	if !strings.Contains(pending.Body, "等待审核") || !strings.Contains(pending.Body, "every 2s") {
+		t.Errorf("pending status partial = %.300s", pending.Body)
+	}
+	if err := harness.SaveCheckpoint(filepath.Join(synthRoot, "20260929-100000-g"),
+		harness.CheckpointState{Status: harness.CheckpointApproved, Mode: harness.ModeInteractive, UpdatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	approved := get(t, mustURL(t, h, "/synth/20260929-100000-g/status"))
+	if !strings.Contains(approved.Body, "已批准") || strings.Contains(approved.Body, "every 2s") {
+		t.Errorf("approved status partial = %.300s", approved.Body)
+	}
+}
+
+func TestSynthRoutesAbsentWithoutSynthDir(t *testing.T) {
+	// serve mode and manual runs pass an empty synthDir: the review
+	// tree must 404, keeping serve read-only.
+	h := NewServer(t.TempDir(), "", nil).Handler()
+	if res := get(t, mustURL(t, h, "/synth/20260929-100000-a")); res.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /synth/{id} without synthDir = %d, want 404", res.StatusCode)
+	}
+	req, err := http.NewRequest(http.MethodPost, mustURL(t, h, "/synth/x/approve"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := doReq(t, req); res.StatusCode != http.StatusNotFound {
+		t.Errorf("POST /synth/{id}/approve without synthDir = %d, want 404", res.StatusCode)
+	}
+}
+
+func TestRunDetailLinksSynthReview(t *testing.T) {
+	// A zero-config run owns both a runs/<id> and a synth/<id> tree:
+	// the run detail page must surface the review page link, and drop
+	// it when no synth tree (or no synthDir) exists.
+	runsDir, synthRoot := t.TempDir(), t.TempDir()
+	runID := "20260929-110000-h"
+	writeJSONT(t, filepath.Join(runsDir, runID, "summary.json"), core.RunResult{
+		RunID: runID, Status: core.StatusCompleted, ExitCode: 0,
+		TaskName: "tcm_zhenghou", CandidateID: "baseline", DatasetName: "synth",
+		StartedAt: time.Date(2026, 9, 29, 11, 0, 0, 0, time.UTC),
+	})
+	writeSynthFixture(t, synthRoot, runID)
+
+	withSynth := NewServer(runsDir, synthRoot, nil).Handler()
+	res := get(t, mustURL(t, withSynth, "/runs/"+runID))
+	if !strings.Contains(res.Body, `href="/synth/`+runID+`"`) {
+		t.Errorf("run detail missing the synth review link:\n%.300s", res.Body)
+	}
+
+	// No synth tree for this id: no link even with a mounted synthDir.
+	other := "20260929-110000-i"
+	writeJSONT(t, filepath.Join(runsDir, other, "summary.json"), core.RunResult{
+		RunID: other, Status: core.StatusCompleted, ExitCode: 0, StartedAt: time.Now(),
+	})
+	res = get(t, mustURL(t, withSynth, "/runs/"+other))
+	if strings.Contains(res.Body, "合成集审核") {
+		t.Errorf("run without a synth tree rendered the review link:\n%.300s", res.Body)
+	}
+
+	// serve mode (empty synthDir): never a link.
+	plain := NewServer(runsDir, "", nil).Handler()
+	res = get(t, mustURL(t, plain, "/runs/"+runID))
+	if strings.Contains(res.Body, "合成集审核") {
+		t.Errorf("serve mode rendered the review link:\n%.300s", res.Body)
+	}
+}
+
+func postForm(t *testing.T, h http.Handler, path string, form url.Values) bodyResponse {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, mustURL(t, h, path), strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return doReq(t, req)
+}
+
+func doMethod(t *testing.T, method, rawURL string) bodyResponse {
+	t.Helper()
+	req, err := http.NewRequest(method, rawURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doReq(t, req)
+}
+
+func doReq(t *testing.T, req *http.Request) bodyResponse {
+	t.Helper()
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read %s: %v", req.URL, err)
+	}
+	return bodyResponse{
+		StatusCode:  res.StatusCode,
+		ContentType: res.Header.Get("Content-Type"),
+		Body:        string(b),
 	}
 }

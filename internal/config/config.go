@@ -18,11 +18,19 @@ const (
 
 // Flag defaults shared across commands.
 const (
-	DefaultAPIKey    = "1"               // local gateway convention
-	DefaultOutDir    = "runs"            // run artifacts land here
-	DefaultWorkers   = 4                 // parallel evaluation workers
-	DefaultAddr      = "127.0.0.1:17700" // web dashboard listen address
-	DefaultMaxTokens = 2048              // reasoning models need headroom
+	DefaultAPIKey  = "1"               // local gateway convention
+	DefaultOutDir  = "runs"            // run artifacts land here
+	DefaultWorkers = 4                 // parallel evaluation workers
+	DefaultAddr    = "127.0.0.1:17700" // web dashboard listen address
+	// DefaultMaxTokens: reasoning models (jiuwei-tcm) spend thousands
+	// of completion tokens on reasoning before writing content — a
+	// single extraction call was observed consuming 7.5k tokens
+	// (tcmsp-30 e2e, 2026-09-29). 2048 flakily truncates them.
+	DefaultMaxTokens = 8192
+
+	DefaultSamples        = 6    // synthesized samples in zero-config mode
+	DefaultProbeVariants  = 2    // probe prompt variants for the p¹ filter
+	DefaultSynthMaxTokens = 4096 // completion floor for synthesis calls
 )
 
 // resolve returns the first non-empty of flag value, environment

@@ -41,7 +41,22 @@ cd PromptOpt
 go build -o promptopt ./cmd/promptopt
 ```
 
-### 运行评估
+### 零配置模式：只有一句提示词
+
+还没有任务 YAML？直接把自然语言提示词作为位置参数交给 `run`，Harness Builder 会自动合成任务规格、评测集与指标（p¹ 方差过滤提纯），经检查点确认后跑 baseline 评估：
+
+```bash
+export PROMPTOPT_BASE_URL=http://localhost:11434/v1   # 任意 OpenAI 兼容端点
+export PROMPTOPT_MODEL=qwen2.5
+
+promptopt run "从中医病历文本中抽取症状、证型与方剂，输出 JSON" --web
+```
+
+- 默认全托管：合成 → p¹ 过滤 → 检查点自动放行 → baseline 评估，一气呵成
+- 加 `--interactive` 则在合成集检查点暂停：浏览器打开审核页增删改样本后点"批准并继续"，或直接编辑 `synth/<run_id>/checkpoint.json`
+- 合成产物落 `synth/<run_id>/`（manifest / spec / samples / filter / checkpoint），评估产物落 `runs/<run_id>/`；看板会给出审核页入口
+
+### 运行评估（配置模式）
 
 以 [examples/json_extraction](examples/json_extraction/)（中医医疗 NER 抽取）为例：
 
@@ -96,7 +111,7 @@ PromptOpt/
 
 ## 当前状态
 
-v2 处于 V0 → V1 阶段：Go 骨架、Provider、并行评估引擎与 Web 看板已落地（`promptopt run --web` / `promptopt serve` 可用）；Harness Builder 与 GEPA 引擎按 V2 / V3 里程碑推进。
+v2 处于 V0 → V2 已落地阶段：Go 骨架、Provider、并行评估引擎、Web 看板与零配置 Harness Builder（合成 → p¹ 过滤 → 检查点 → baseline 评估，含合成集审核页）可用；GEPA 优化引擎按 V3 里程碑推进。
 
 ## v1（Python）归档
 

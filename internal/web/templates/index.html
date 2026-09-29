@@ -40,6 +40,10 @@
 {{if .Live}}
 <section id="live">
   <h2>实时事件流</h2>
+  <div id="checkpoint-banner" hidden class="card" style="margin:.25rem 0 .6rem">
+    ⏸ <strong>合成集等待审核</strong>：<a id="checkpoint-link" href="#">打开审核页</a>
+    （检查样本、增删改后批准，或直接编辑 synth/&lt;run_id&gt;/checkpoint.json）
+  </div>
   <div id="live-status" class="dim">等待事件…</div>
   <div id="budget" hidden></div>
   <table>
@@ -119,6 +123,27 @@ es.onmessage = e => {
   } else if (ev.type === 'budget_stop') {
     budgetEl.hidden = false;
     budgetEl.textContent = '预算已触顶：停止派发新样本，在跑样本继续完成';
+  } else if (ev.type === 'synth_done') {
+    statusEl.className = 'dim';
+    statusEl.textContent = '合成完成：任务规格 + ' + (ev.detail ? ev.detail.samples : '?') +
+      ' 条样本 + ' + (ev.detail ? ev.detail.probes : '?') + ' 条探针变体，方差过滤中…';
+  } else if (ev.type === 'filter_done') {
+    statusEl.className = 'dim';
+    statusEl.textContent = '方差过滤完成：保留 ' + (ev.detail ? ev.detail.kept : '?') +
+      ' 条，剔除 ' + (ev.detail ? ev.detail.dropped : '?') + ' 条';
+  } else if (ev.type === 'checkpoint') {
+    const status = ev.detail ? ev.detail.status : '';
+    const banner = document.getElementById('checkpoint-banner');
+    if (status === 'pending') {
+      document.getElementById('checkpoint-link').href = '/synth/' + ev.run_id;
+      banner.hidden = false;
+      statusEl.className = 'warn';
+      statusEl.textContent = '检查点：合成集等待人工审核（--interactive）';
+    } else if (status === 'approved') {
+      banner.hidden = true;
+      statusEl.className = 'dim';
+      statusEl.textContent = '检查点已放行，baseline 评估继续';
+    }
   } else if (ev.type === 'run_done') {
     statusEl.className = ev.status === 'completed' ? 'ok' : (ev.status === 'failed' ? 'bad' : 'warn');
     statusEl.textContent = 'run ' + ev.run_id + ' — ' + ev.status + '（exit ' + ev.exit_code + '）· 未派发 ' + ev.undispatched;

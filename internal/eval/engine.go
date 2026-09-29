@@ -50,6 +50,10 @@ type Event struct {
 	MetricMeans   map[string]float64       `json:"metric_means,omitempty"`
 	UsageByRole   map[core.Role]core.Usage `json:"usage_by_role,omitempty"`
 	FailedSamples []string                 `json:"failed_samples,omitempty"`
+	// Detail carries stage-specific payloads for non-eval lifecycle
+	// events (harness synthesis/filter/checkpoint counters) so the
+	// events.jsonl + SSE envelope stays single-shaped.
+	Detail map[string]any `json:"detail,omitempty"`
 }
 
 // CallTrace records one LLM call of one sample; it is serialized to
