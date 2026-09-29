@@ -442,6 +442,7 @@ func TestEventsReplay(t *testing.T) {
 type bodyResponse struct {
 	StatusCode  int
 	ContentType string
+	Header      http.Header
 	Body        string
 }
 
@@ -468,6 +469,7 @@ func get(t *testing.T, url string) bodyResponse {
 	return bodyResponse{
 		StatusCode:  res.StatusCode,
 		ContentType: res.Header.Get("Content-Type"),
+		Header:      res.Header.Clone(),
 		Body:        string(b),
 	}
 }
@@ -895,7 +897,7 @@ func doReq(t *testing.T, req *http.Request) bodyResponse {
 	t.Helper()
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read %s: %v", req.URL, err)
 	}
 	defer res.Body.Close()
 	b, err := io.ReadAll(res.Body)
@@ -905,6 +907,7 @@ func doReq(t *testing.T, req *http.Request) bodyResponse {
 	return bodyResponse{
 		StatusCode:  res.StatusCode,
 		ContentType: res.Header.Get("Content-Type"),
+		Header:      res.Header.Clone(),
 		Body:        string(b),
 	}
 }
