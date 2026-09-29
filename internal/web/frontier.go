@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"math"
 	"net/http"
 	"os"
@@ -43,7 +44,10 @@ func readAdopted(runDir string) (adoptedFile, bool) {
 // heatCell is one per-sample score cell with its inline color.
 type heatCell struct {
 	Value string
-	Color string // inline rgba background, "" when no score
+	// Color is the rgba background as trusted CSS: the value is built
+	// server-side from a clamped float, but html/template's style
+	// attribute filter rejects any parenthesis, which rgba() needs.
+	Color template.CSS
 }
 
 // frontierMemberView is one candidate card plus its heat-table row.
@@ -272,12 +276,12 @@ func reasonLabel(reason string) string {
 
 // heatColor maps a per-sample score to an inline rgba background,
 // clamped to [0, 1] and capped for text contrast.
-func heatColor(v float64) string {
+func heatColor(v float64) template.CSS {
 	if math.IsNaN(v) {
 		return ""
 	}
 	a := 0.05 + 0.5*min(max(v, 0), 1)
-	return fmt.Sprintf("rgba(26,127,55,%.2f)", a)
+	return template.CSS(fmt.Sprintf("rgba(26,127,55,%.2f)", a))
 }
 
 // handleAdopt writes (or switches) adopted.json. Idempotent: adopting

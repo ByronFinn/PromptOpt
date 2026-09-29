@@ -434,7 +434,7 @@ func TestComparePage(t *testing.T) {
 		t.Fatalf("compare = %d: %s", res.StatusCode, res.Body)
 	}
 	for _, want := range []string{
-		"0.5000", "0.7500", "+0.2500", // metric cells and Δ
+		"0.5000", "0.7500", "&#43;0.2500", // metric cells and Δ (htmlEscaper encodes the plus sign)
 		"160", "100", // per-role token totals
 		idA, idB, // selects carry both runs
 		"—", // B has no frontier: Top-1 dash
