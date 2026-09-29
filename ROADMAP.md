@@ -52,8 +52,8 @@ promptopt/                      # Go module（同仓库原地重写，单二进�
 │   ├── provider/               # OpenAI-compat 通用 + Anthropic；重试/限流/usage
 │   ├── harness/                # 合成任务规格+数据集+指标；p¹ 方差过滤
 │   ├── eval/                   # 并行评估（goroutine+errgroup）、trace 捕获、指标
-│   ├── engine/                 # Reflector / Mutator / Frontier / Budget / VistaGuard
-│   ├── optimizers/             # Optimizer 接口（多范式可插拔，v1 仅 GEPA）
+│   ├── engine/                 # Reflector / Mutator / Frontier / Budget / VistaGuard；Optimizer 接口落位于此，V5 多范式时再拆 optimizers/
+│   ├── optimizers/             # （V5）多范式可插拔实现
 │   ├── store/                  # SQLite + artifact 文件
 │   └── web/                    # net/http + htmx 模板 + SSE；go:embed
 └── web/                        # 前端模板与静态资源（嵌入源）
@@ -107,14 +107,14 @@ promptopt/                      # Go module（同仓库原地重写，单二进�
 
 **目标**：反思进化闭环成立（v1 算法核心）。
 
-- [ ] Reflector：读 minibatch 全量 trace（ASI）生成自然语言诊断与假设
-- [ ] Mutator：沿假设 + 祖先经验教训突变候选；前沿互补合并
-- [ ] Frontier：per-example 分数矩阵 + 非支配排序
-- [ ] Budget：token 用量 ∥ 评估次数双阀门，context 传递，耗尽优雅终止
-- [ ] VistaGuard：假设生成与重写解耦、语义标注假设并行验证、随机重启、ε-greedy
-- [ ] 候选 lineage + 解释性报告（优化轨迹、预算消耗、最终前沿）
+- [x] Reflector：读 minibatch 全量 trace（ASI）生成自然语言诊断与假设
+- [x] Mutator：沿假设 + 祖先经验教训突变候选；前沿互补合并
+- [x] Frontier：per-example 分数矩阵 + 非支配排序
+- [x] Budget：token 用量 ∥ 评估次数双阀门，context 传递，耗尽优雅终止（另设 --budget-opt-tokens 优化侧独立阀门）
+- [x] VistaGuard：假设生成与重写解耦、语义标注假设并行验证、随机重启、ε-greedy
+- [x] 候选 lineage + 解释性报告（优化轨迹、预算消耗、最终前沿）
 
-**验收**：坏种子场景有防护且留事件记录；预算耗尽输出当前最优而非空手而归；lineage 全程可追溯。
+**验收**：坏种子场景有防护且留事件记录（vista_restart 事件）；预算耗尽输出当前最优而非空手而归；lineage 全程可追溯。
 
 ### V4：Web UI 完整化 🛠
 

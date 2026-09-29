@@ -1,0 +1,160 @@
+package engine
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/ByronFinn/PromptOpt/internal/config"
+	"github.com/ByronFinn/PromptOpt/internal/core"
+	"github.com/ByronFinn/PromptOpt/internal/eval"
+	"github.com/ByronFinn/PromptOpt/internal/provider"
+)
+
+// errOptBudget is the sentinel for a tripped optimizer-side token
+// valve; the main loop converts it to reason=budget_stopped.
+var errOptBudget = errors.New("optimizer token budget exhausted")
+
+// maxOptAttempts bounds the empty-content escalation ladder: a
+// reasoning model can burn the whole completion cap on reasoning, so
+// the cap doubles per attempt (floor → 2× → 4×) before failing.
+const maxOptAttempts = 3
+
+// advisor performs optimizer-side LLM calls (reflection, mutation,
+// repairs): every attempt is traced under RunDir/opt-calls/NNN-<stage>
+// .json, successful usage is metered into the shared budget under the
+// optimizer role (which never arms the executor soft stop), and every
+// dial is gated by the optimizer token valve (OptBudgetTokens,
+// cumulative optimizer-role usage, synthesis included; 0 = unlimited).
+// The escalation ladder mirrors harness.Synthesizer
+// (synthesize.go:147-217); kept private to avoid a reverse dependency
+// on harness — merge candidate for V5.
+type advisor struct {
+	provider        provider.Provider
+	model           string
+	optMaxTokens    int
+	dir             string
+	budget          *eval.Budget
+	optBudgetTokens int64
+	runID           string
+	onEvent         func(eval.Event)
+
+	floor      int // completion cap learned from a successful escalation
+	seq        int
+	valveFired bool
+}
+
+func newAdvisor(req Request) *advisor {
+	return &advisor{
+		provider:        req.Provider,
+		model:           req.Model,
+		optMaxTokens:    req.OptMaxTokens,
+		dir:             filepath.Join(req.RunDir, "opt-calls"),
+		budget:          req.Budget,
+		optBudgetTokens: req.OptBudgetTokens,
+		runID:           req.RunID,
+		onEvent:         req.OnEvent,
+	}
+}
+
+// ValveTripped reports whether the optimizer-side valve is armed.
+func (a *advisor) ValveTripped() bool {
+	if a.optBudgetTokens <= 0 {
+		return false
+	}
+	_, usage := a.budget.Snapshot()
+	return usage[core.RoleOptimizer].Total() >= a.optBudgetTokens
+}
+
+// ValveFired reports whether the valve event was ever emitted.
+func (a *advisor) ValveFired() bool { return a.valveFired }
+
+// notifyValve emits the optimizer-role budget_stop event once.
+func (a *advisor) notifyValve() {
+	if a.valveFired || a.onEvent == nil {
+		a.valveFired = true
+		return
+	}
+	a.valveFired = true
+	a.onEvent(eval.Event{
+		Type: eval.EventBudgetStop, Time: time.Now(), RunID: a.runID,
+		Detail: map[string]any{"role": string(core.RoleOptimizer)},
+	})
+}
+
+// call dials one optimizer-side request through the escalation
+// ladder. The valve is checked before every dial.
+func (a *advisor) call(ctx context.Context, stage, prompt string) (string, error) {
+	if a.ValveTripped() {
+		a.notifyValve()
+		return "", errOptBudget
+	}
+	if err := os.MkdirAll(a.dir, 0o755); err != nil {
+		return "", fmt.Errorf("create opt-calls dir: %w", err)
+	}
+	floor := max(a.optMaxTokens, config.DefaultOptMaxTokens, a.floor)
+	var last provider.ChatResponse
+	for attempt := range maxOptAttempts {
+		resp, err := a.chat(ctx, stage, prompt, floor<<attempt)
+		if err != nil {
+			return "", err
+		}
+		last = resp
+		if resp.Content != "" {
+			if attempt > 0 {
+				// Remember the working cap so later stages skip the
+				// reasoning burn instead of re-escalating.
+				a.floor = floor << attempt
+			}
+			return resp.Content, nil
+		}
+		if resp.FinishReason != "length" && resp.ReasoningContent == "" {
+			return "", fmt.Errorf("opt call %s: 模型返回空内容（finish_reason=%s）",
+				stage, cmp.Or(resp.FinishReason, "unknown"))
+		}
+		// Reasoning consumed the completion cap: escalate.
+	}
+	return "", fmt.Errorf("opt call %s: 连续 %d 次空内容（finish_reason=%s，completion=%d tokens）— 推理模型耗尽了全部 completion 预算，请提高 --max-tokens",
+		stage, maxOptAttempts, cmp.Or(last.FinishReason, "unknown"), last.Usage.CompletionTokens)
+}
+
+// chat performs one traced round trip. Every attempt — including
+// escalations — writes its own trace file with its own sequence
+// number. Usage counts even when the content is empty: the tokens
+// were spent either way.
+func (a *advisor) chat(ctx context.Context, stage, prompt string, tokenCap int) (provider.ChatResponse, error) {
+	a.seq++
+	req := provider.ChatRequest{
+		Model:     a.model,
+		MaxTokens: tokenCap,
+		Role:      core.RoleOptimizer,
+		Messages:  []provider.Message{{Role: "user", Content: prompt}},
+	}
+	start := time.Now()
+	resp, err := a.provider.Chat(ctx, req)
+	trace := eval.CallTrace{
+		Seq:       a.seq,
+		SampleID:  stage,
+		Role:      core.RoleOptimizer,
+		Request:   req,
+		Response:  resp,
+		LatencyMS: time.Since(start).Milliseconds(),
+		Time:      start,
+	}
+	if err != nil {
+		trace.Error = err.Error()
+	}
+	path := filepath.Join(a.dir, fmt.Sprintf("%03d-%s.json", a.seq, stage))
+	if werr := saveJSON(path, trace); werr != nil && err == nil {
+		err = fmt.Errorf("write opt call trace: %w", werr)
+	}
+	if err != nil {
+		return provider.ChatResponse{}, fmt.Errorf("opt call %s: %w", stage, err)
+	}
+	a.budget.RecordUsage(core.RoleOptimizer, resp.Usage)
+	return resp, nil
+}

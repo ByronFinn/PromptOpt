@@ -123,7 +123,8 @@ func TestTokenizeSplitsCJK(t *testing.T) {
 
 func TestBudgetEvalLimit(t *testing.T) {
 	b := NewBudget(0, 2)
-	if !b.TryAcquireEval() || !b.TryAcquireEval() {
+	first, second := b.TryAcquireEval(), b.TryAcquireEval()
+	if !first || !second {
 		t.Fatal("first two acquires must succeed")
 	}
 	if b.TryAcquireEval() {

@@ -53,6 +53,10 @@ type FilterReport struct {
 	PerSample        []SampleVerdict `json:"per_sample"`
 	Kept             int             `json:"kept"`
 	DroppedByVerdict map[Verdict]int `json:"dropped_by_verdict"`
+	// FallbackAll records that the kept set came out empty (every
+	// sample dead or noisy) and the baseline/optimization ran on the
+	// full synthesized set instead — scores will be near-constant.
+	FallbackAll bool `json:"fallback_all,omitempty"`
 }
 
 // SampleVerdict is one sample's probe evidence and p¹ verdict.

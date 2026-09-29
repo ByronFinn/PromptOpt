@@ -225,7 +225,7 @@ func parseRetryAfter(v string) time.Duration {
 		return time.Duration(secs) * time.Second
 	}
 	if t, err := http.ParseTime(v); err == nil {
-		return max(t.Sub(time.Now()), 0)
+		return max(time.Until(t), 0)
 	}
 	return 0
 }

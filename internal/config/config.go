@@ -28,13 +28,23 @@ const (
 	// (tcmsp-30 e2e, 2026-09-29). 2048 flakily truncates them.
 	DefaultMaxTokens = 8192
 
-	DefaultSamples        = 6    // synthesized samples in zero-config mode
-	DefaultProbeVariants  = 2    // probe prompt variants for the p¹ filter
+	DefaultSamples       = 6 // synthesized samples in zero-config mode
+	DefaultProbeVariants = 2 // probe prompt variants for the p¹ filter
 	// DefaultSynthMaxTokens: one synthesis call returns a task spec plus
 	// N samples as JSON — reasoning models spend most of the budget
 	// thinking first. jiuwei-tcm serves n_ctx=20736, so 8192 completion
 	// tokens leaves ample headroom and stops content-empty responses.
 	DefaultSynthMaxTokens = 8192 // completion floor for synthesis calls
+
+	// GEPA engine defaults (V3).
+	DefaultMaxRounds       = 5   // optimization rounds
+	DefaultMinibatch       = 4   // samples drawn per round
+	DefaultEpsilon         = 0.2 // exploration rate of hypothesis selection
+	DefaultStagnationLimit = 3   // stagnant rounds before a Fresh restart
+	// DefaultOptMaxTokens: optimizer-side calls (reflection, mutation)
+	// return long JSON after heavy reasoning — give them the same
+	// generous completion floor as synthesis; no 4096-level clamping.
+	DefaultOptMaxTokens = 8192
 )
 
 // resolve returns the first non-empty of flag value, environment

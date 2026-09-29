@@ -3,16 +3,19 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +25,7 @@ import (
 
 	"github.com/ByronFinn/PromptOpt/internal/config"
 	"github.com/ByronFinn/PromptOpt/internal/core"
+	"github.com/ByronFinn/PromptOpt/internal/engine"
 	"github.com/ByronFinn/PromptOpt/internal/eval"
 	"github.com/ByronFinn/PromptOpt/internal/harness"
 	"github.com/ByronFinn/PromptOpt/internal/provider"
@@ -35,6 +39,10 @@ type runOptions struct {
 	addr, prompt                          string
 	maxTokens, budgetTokens, budgetEvals  int
 	workers, samples, probeVariants       int
+	maxRounds, minibatch, stagnationLimit int
+	epsilon                               float64
+	seed                                  int64
+	budgetOptTokens                       int64
 	web, headless, interactive            bool
 }
 
@@ -105,7 +113,7 @@ func runManual(o runOptions) int {
 		return exitFailure
 	}
 
-	engine := &eval.Engine{
+	eng := &eval.Engine{
 		RunID: runID, RunDir: runDir, Model: o.model, MaxTokens: o.maxTokens,
 		Workers: o.workers, Metrics: task.Metrics, Split: o.split,
 		Budget:   eval.NewBudget(int64(o.budgetTokens), int64(o.budgetEvals)),
@@ -114,19 +122,27 @@ func runManual(o runOptions) int {
 		OnEvent: sink.fanout.emit,
 	}
 
-	res, err := engine.Run(sink.ctx, cand, samples)
+	res, err := eng.Run(sink.ctx, cand, samples)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		sink.close()
 		return exitFailure
 	}
-	return finishRun(o, sink, res, runDir, task.Primary())
+	return finishRun(o, sink, res, runDir, task.Primary(), nil)
 }
 
 // runSynthesized is the zero-config mode: the positional natural-
-// language prompt drives the Harness Builder pipeline. Artifacts land
-// twice — synthesis under synth/<run_id>/, the baseline evaluation
-// under runs/<run_id>/ — sharing one event stream and budget.
+// language prompt drives the Harness Builder pipeline, then the GEPA
+// engine optimizes the prompt over the retained sample set. Artifacts
+// land twice — synthesis under synth/<run_id>/, the baseline
+// evaluation and optimization under runs/<run_id>/ — sharing one
+// event stream and budget.
+//
+// run_done ownership: the engine layer never emits run_done, and the
+// OnEvent wrapper drops the baseline's inner run_done too, so the SSE
+// stream and the events.jsonl replay survive the whole optimization.
+// Exactly one terminal run_done is emitted here, after the exit code
+// is finalized.
 func runSynthesized(o runOptions) int {
 	runID := newRunID()
 	runDir := filepath.Join(o.outDir, runID)
@@ -136,7 +152,18 @@ func runSynthesized(o runOptions) int {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		return exitFailure
 	}
+	// Drop every run_done before the fanout (the baseline evaluation
+	// emits one); the single terminal run_done is emitted below.
+	emit := func(ev eval.Event) {
+		if ev.Type == eval.EventRunDone {
+			return
+		}
+		sink.fanout.emit(ev)
+	}
 
+	if o.seed == 0 {
+		o.seed = newSeed()
+	}
 	mode := harness.ModeAutopilot
 	if o.interactive {
 		mode = harness.ModeInteractive
@@ -147,24 +174,35 @@ func runSynthesized(o runOptions) int {
 		BudgetTokens: int64(o.budgetTokens), BudgetEvals: int64(o.budgetEvals),
 		Mode: string(mode), Prompt: o.prompt,
 		SynthSamples: o.samples, ProbeVariants: o.probeVariants,
+		MaxRounds: o.maxRounds, Minibatch: o.minibatch, Epsilon: o.epsilon,
+		StagnationLimit: o.stagnationLimit, Seed: o.seed,
+		BudgetOptTokens: o.budgetOptTokens,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		sink.close()
 		return exitFailure
 	}
 
+	budget := eval.NewBudget(int64(o.budgetTokens), int64(o.budgetEvals))
+	prov := provider.NewOpenAI(o.baseURL, o.apiKey, provider.OpenAIConfig{})
 	pipeline := &harness.Pipeline{
 		RunID: runID, RunsDir: o.outDir,
 		SynthDir: filepath.Join(synthBase, runID),
 		Prompt:   o.prompt,
-		Provider: provider.NewOpenAI(o.baseURL, o.apiKey, provider.OpenAIConfig{}),
+		Provider: prov,
 		Model:    o.model, MaxTokens: o.maxTokens, SynthMaxTokens: o.maxTokens,
 		SamplesN: o.samples, ProbeVariants: o.probeVariants, Workers: o.workers,
-		Budget:  eval.NewBudget(int64(o.budgetTokens), int64(o.budgetEvals)),
+		Budget:  budget,
 		Mode:    mode,
-		OnEvent: sink.fanout.emit,
+		OnEvent: emit,
 	}
+	// The collector rides the fanout for the baseline window only:
+	// probe events stay internal to the harness filter, engine unit
+	// events subscribe after Optimize has finished.
+	collector := engine.NewRecordCollector()
+	unhook := sink.fanout.subscribe(collector.Collect)
 	res, err := pipeline.Run(sink.ctx)
+	unhook()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		sink.close()
@@ -174,7 +212,109 @@ func runSynthesized(o runOptions) int {
 	if spec, err := harness.LoadSpec(filepath.Join(synthBase, runID)); err == nil {
 		primary = spec.Task.Primary()
 	}
-	return finishRun(o, sink, res, runDir, primary)
+
+	// Baseline budget-exhausted (or aborted): skip the loop, emit the
+	// terminal run_done and keep the exit contract (2 / 1).
+	if res.Status != core.StatusCompleted {
+		fanoutTerminalRunDone(sink.fanout.emit, res)
+		return finishRun(o, sink, res, runDir, primary, nil)
+	}
+
+	optRes, err := runOptimization(sink.ctx, runID, runDir, filepath.Join(synthBase, runID), o, prov, budget, collector, emit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
+		res.Status = core.StatusFailed
+		res.ExitCode = exitFailure
+	} else {
+		// Terminal sync: the engine's reason maps onto the run verdict
+		// and the usage snapshot is refreshed past its baseline-time
+		// copy (engine.go copies at run end).
+		switch optRes.Reason {
+		case engine.ReasonBudgetStopped:
+			res.Status = core.StatusBudgetExhausted
+			res.ExitCode = exitBudgetExhausted
+		case engine.ReasonAborted:
+			res.Status = core.StatusAborted
+			res.ExitCode = exitFailure
+		}
+		_, usage := budget.Snapshot()
+		res.UsageByRole = usage
+	}
+	fanoutTerminalRunDone(sink.fanout.emit, res)
+	var best *engine.Result
+	if err == nil {
+		best = &optRes
+	}
+	return finishRun(o, sink, res, runDir, primary, best)
+}
+
+// runOptimization drives the GEPA loop over the retained sample set:
+// it recomputes the kept samples (the checkpoint pause may have edited
+// them), harvests the baseline records and wires the engine request.
+func runOptimization(ctx context.Context, runID, runDir, synthDir string, o runOptions,
+	prov *provider.Client, budget *eval.Budget, collector *engine.RecordCollector, emit func(eval.Event)) (engine.Result, error) {
+	spec, err := harness.LoadSpec(synthDir)
+	if err != nil {
+		return engine.Result{}, fmt.Errorf("reload spec.json: %w", err)
+	}
+	samples, err := harness.LoadSamples(synthDir)
+	if err != nil {
+		return engine.Result{}, fmt.Errorf("reload samples.json: %w", err)
+	}
+	report, err := harness.LoadFilterReport(synthDir)
+	if err != nil {
+		return engine.Result{}, fmt.Errorf("reload filter.json: %w", err)
+	}
+	kept := harness.SelectKept(samples.Samples, &report)
+	if len(kept) == 0 {
+		// The pipeline already fell back to the full synthesized set
+		// when the filter kept nothing (report.FallbackAll); stay
+		// consistent with that decision here. A kept==0 report without
+		// the fallback flag remains a hard error.
+		if !report.FallbackAll {
+			return engine.Result{}, errors.New("过滤后保留样本集为空，无法进行优化")
+		}
+		kept = samples.Samples
+	}
+	req := engine.Request{
+		Task: spec.Task,
+		Params: engine.Params{
+			MaxRounds: o.maxRounds, Minibatch: o.minibatch,
+			StagnationLimit: o.stagnationLimit, Epsilon: o.epsilon, Seed: o.seed,
+		},
+		Initial:  core.Candidate{ID: "baseline", Prompt: spec.Task.PromptTemplate},
+		Samples:  kept,
+		Baseline: collector.Records(kept),
+		Provider: prov,
+		Model:    o.model, MaxTokens: o.maxTokens, OptMaxTokens: o.maxTokens,
+		Workers:         o.workers,
+		Budget:          budget,
+		OptBudgetTokens: o.budgetOptTokens,
+		RunID:           runID, RunDir: runDir,
+		OnEvent: emit,
+	}
+	gepa := &engine.Gepa{}
+	return gepa.Optimize(ctx, req)
+}
+
+// fanoutTerminalRunDone emits the single terminal run_done carrying
+// the final verdict; the cmd layer is its only owner.
+func fanoutTerminalRunDone(emit func(eval.Event), res core.RunResult) {
+	emit(eval.Event{
+		Type: eval.EventRunDone, Time: time.Now(), RunID: res.RunID,
+		Status: string(res.Status), ExitCode: res.ExitCode,
+		Undispatched: res.Undispatched, MetricMeans: res.MetricMeans,
+		UsageByRole: res.UsageByRole, FailedSamples: res.FailedSamples,
+	})
+}
+
+// newSeed derives a random positive seed for --seed 0.
+func newSeed() int64 {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return time.Now().UTC().UnixNano()
+	}
+	return int64(binary.BigEndian.Uint64(b[:]) >> 1)
 }
 
 // startSink opens the run dir, the events.jsonl fanout and the
@@ -239,7 +379,9 @@ func (s *runSink) close() {
 
 // finishRun persists the run summary, tears down the sink and prints
 // the result per the output convention (headless: JSON on stdout).
-func finishRun(o runOptions, sink *runSink, res core.RunResult, runDir, primary string) int {
+// opt, when non-nil, adds the optimizer's best-prompt block to the
+// human summary.
+func finishRun(o runOptions, sink *runSink, res core.RunResult, runDir, primary string, opt *engine.Result) int {
 	// summary.json is the primary artifact (spec); run.json is written
 	// alongside with identical content as the engine-slice contract
 	// name for the run summary.
@@ -258,7 +400,7 @@ func finishRun(o runOptions, sink *runSink, res core.RunResult, runDir, primary 
 		}
 		return res.ExitCode
 	}
-	printHumanSummary(os.Stderr, res, runDir, primary)
+	printHumanSummary(os.Stderr, res, runDir, primary, opt)
 	return res.ExitCode
 }
 
@@ -285,6 +427,12 @@ func parseRunFlags(args []string) (runOptions, error) {
 	fs.IntVar(&o.workers, "workers", config.DefaultWorkers, "parallel evaluation workers")
 	fs.IntVar(&o.samples, "samples", config.DefaultSamples, "synthesized sample count (zero-config mode)")
 	fs.IntVar(&o.probeVariants, "probe-variants", config.DefaultProbeVariants, "probe prompt variants for variance filtering (zero-config mode)")
+	fs.IntVar(&o.maxRounds, "max-rounds", config.DefaultMaxRounds, "GEPA optimization rounds (zero-config mode)")
+	fs.IntVar(&o.minibatch, "minibatch", config.DefaultMinibatch, "samples drawn per reflection round (zero-config mode)")
+	fs.Float64Var(&o.epsilon, "epsilon", config.DefaultEpsilon, "exploration rate of hypothesis selection, 0..1 (zero-config mode)")
+	fs.IntVar(&o.stagnationLimit, "stagnation-limit", config.DefaultStagnationLimit, "stagnant rounds before a fresh restart (zero-config mode)")
+	fs.Int64Var(&o.seed, "seed", 0, "optimization rng seed (0 = derive and record in the manifest)")
+	fs.Int64Var(&o.budgetOptTokens, "budget-opt-tokens", 0, "optimizer token budget, cumulative (0 = unlimited)")
 	fs.BoolVar(&o.interactive, "interactive", false, "pause at the synthesis checkpoint for manual review (zero-config mode)")
 	fs.StringVar(&o.outDir, "out", "", "run output directory (env PROMPTOPT_OUT, default runs/)")
 	fs.StringVar(&o.addr, "addr", config.DefaultAddr, "dashboard listen address (requires --web)")
@@ -354,6 +502,24 @@ func parseRunFlags(args []string) (runOptions, error) {
 	}
 	if o.probeVariants <= 0 {
 		errs = append(errs, fmt.Errorf("--probe-variants must be positive, got %d", o.probeVariants))
+	}
+	if o.maxRounds < 1 {
+		errs = append(errs, fmt.Errorf("--max-rounds must be >= 1, got %d", o.maxRounds))
+	}
+	if o.minibatch < 1 {
+		errs = append(errs, fmt.Errorf("--minibatch must be >= 1, got %d", o.minibatch))
+	}
+	if o.epsilon < 0 || o.epsilon > 1 {
+		errs = append(errs, fmt.Errorf("--epsilon must be within [0, 1], got %v", o.epsilon))
+	}
+	if o.stagnationLimit < 1 {
+		errs = append(errs, fmt.Errorf("--stagnation-limit must be >= 1, got %d", o.stagnationLimit))
+	}
+	if o.seed < 0 {
+		errs = append(errs, fmt.Errorf("--seed must be >= 0, got %d", o.seed))
+	}
+	if o.budgetOptTokens < 0 {
+		errs = append(errs, fmt.Errorf("--budget-opt-tokens must be zero (unlimited) or positive, got %d", o.budgetOptTokens))
 	}
 	o.baseURL = config.BaseURL(o.baseURL)
 	if o.baseURL == "" {
@@ -433,6 +599,14 @@ type runManifest struct {
 	Prompt        string    `json:"prompt,omitempty"`
 	SynthSamples  int       `json:"synth_samples,omitempty"`
 	ProbeVariants int       `json:"probe_variants,omitempty"`
+	// GEPA engine settings (zero-config mode only; seed always records
+	// the derived actual value when --seed 0).
+	MaxRounds       int     `json:"max_rounds,omitempty"`
+	Minibatch       int     `json:"minibatch,omitempty"`
+	Epsilon         float64 `json:"epsilon,omitempty"`
+	StagnationLimit int     `json:"stagnation_limit,omitempty"`
+	Seed            int64   `json:"seed,omitempty"`
+	BudgetOptTokens int64   `json:"budget_opt_tokens,omitempty"`
 }
 
 // synthRoot places the synthesis artifact tree next to the runs tree:
@@ -535,12 +709,41 @@ func progressPrinter(w io.Writer) func(eval.Event) {
 		case harness.EventFilterDone:
 			fmt.Fprintf(w, "  方差过滤：保留 %s 条，剔除 %s 条\n",
 				detailCount(ev.Detail, "kept"), detailCount(ev.Detail, "dropped"))
+		case harness.EventFilterFallback:
+			fmt.Fprintf(w, "  方差过滤：无区分样本（全部 dead/noisy），回退使用全部 %s 条合成样本（见 filter.json fallback_all）\n",
+				detailCount(ev.Detail, "samples"))
 		case harness.EventCheckpoint:
 			if status, _ := ev.Detail["status"].(string); status == "pending" {
 				fmt.Fprintln(w, "  检查点：合成集等待审核（--interactive；可在 Web 审核页批准或直接编辑 checkpoint.json）…")
 			} else {
 				fmt.Fprintln(w, "  检查点：已放行，继续 baseline 评估")
 			}
+		case engine.EventRoundStart:
+			fmt.Fprintf(w, "  优化第 %s 轮开始…\n", detailCount(ev.Detail, "round"))
+		case engine.EventReflectDone:
+			fmt.Fprintf(w, "  反思完成：%s 条假设\n", detailCount(ev.Detail, "hypotheses"))
+		case engine.EventHypoValidated:
+			mode, _ := ev.Detail["mode"].(string)
+			sel, _ := ev.Detail["selected_hypothesis"].(string)
+			fmt.Fprintf(w, "  假设验证：选中 %s（模式 %s）\n", sel, mode)
+		case engine.EventMutateDone:
+			operator, _ := ev.Detail["operator"].(string)
+			cand, _ := ev.Detail["candidate"].(string)
+			fmt.Fprintf(w, "  突变完成：%s → %s\n", operator, cand)
+		case engine.EventFrontierUpdated:
+			if admitted, _ := ev.Detail["admitted"].(bool); admitted {
+				fmt.Fprintf(w, "  前沿更新：%s 准入（淘汰 %d 个）\n", detailAny(ev.Detail["candidate"]), lenDetail(ev.Detail, "evicted"))
+			} else {
+				fmt.Fprintf(w, "  前沿更新：%s 未准入\n", detailAny(ev.Detail["candidate"]))
+			}
+		case engine.EventVistaRestart:
+			fmt.Fprintf(w, "  VISTA 重启：连续 %s 轮无改进，随机重启\n", detailCount(ev.Detail, "stagnant"))
+		case engine.EventRoundDone:
+			if skipped, _ := ev.Detail["skipped"].(bool); skipped {
+				fmt.Fprintf(w, "  第 %s 轮跳过（优化侧调用失败，记停滞）\n", detailCount(ev.Detail, "round"))
+				return
+			}
+			fmt.Fprintf(w, "  第 %s 轮结束：主指标均值 %s\n", detailCount(ev.Detail, "round"), detailFloat(ev.Detail, "primary_mean"))
 		}
 	}
 }
@@ -549,6 +752,30 @@ func progressPrinter(w io.Writer) func(eval.Event) {
 func detailCount(detail map[string]any, key string) string {
 	if n, ok := detail[key].(int); ok {
 		return strconv.Itoa(n)
+	}
+	return "?"
+}
+
+// detailAny renders an in-process detail value as-is.
+func detailAny(v any) string {
+	if v == nil {
+		return "?"
+	}
+	return fmt.Sprint(v)
+}
+
+// lenDetail renders the length of a string-slice detail value.
+func lenDetail(detail map[string]any, key string) int {
+	if xs, ok := detail[key].([]string); ok {
+		return len(xs)
+	}
+	return 0
+}
+
+// detailFloat renders a float detail value with four decimals.
+func detailFloat(detail map[string]any, key string) string {
+	if v, ok := detail[key].(float64); ok {
+		return strconv.FormatFloat(v, 'f', 4, 64)
 	}
 	return "?"
 }
@@ -562,7 +789,8 @@ func detailWarnings(detail map[string]any) string {
 }
 
 // printHumanSummary prints the final run block for interactive use.
-func printHumanSummary(w io.Writer, res core.RunResult, runDir, primary string) {
+// opt, when non-nil, adds the optimizer's best prompt block.
+func printHumanSummary(w io.Writer, res core.RunResult, runDir, primary string, opt *engine.Result) {
 	fmt.Fprintf(w, "\nrun %s: %s (exit %d)\n", res.RunID, res.Status, res.ExitCode)
 	fmt.Fprintf(w, "samples: %d evaluated, %d failed, %d undispatched\n",
 		res.Evaluated, len(res.FailedSamples), res.Undispatched)
@@ -590,6 +818,15 @@ func printHumanSummary(w io.Writer, res core.RunResult, runDir, primary string) 
 			fmt.Fprintf(w, "usage[%s]: prompt=%d completion=%d total=%d\n",
 				role, u.PromptTokens, u.CompletionTokens, u.Total())
 		}
+	}
+	if opt != nil {
+		fmt.Fprintf(w, "optimized: %d rounds (%s), best candidate %q\n",
+			opt.Rounds, opt.Reason, opt.Best.ID)
+		for _, m := range slices.Sorted(maps.Keys(opt.BestMeans)) {
+			fmt.Fprintf(w, "  best %s=%.4f\n", m, opt.BestMeans[m])
+		}
+		fmt.Fprintf(w, "best prompt:\n---\n%s\n---\n", opt.Best.Prompt)
+		fmt.Fprintf(w, "report: %s\n", filepath.Join(runDir, "report.md"))
 	}
 	fmt.Fprintf(w, "artifacts: %s\n", runDir)
 }

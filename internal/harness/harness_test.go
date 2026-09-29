@@ -523,6 +523,114 @@ func TestPipelineAutopilotEndToEnd(t *testing.T) {
 
 // --- filter -----------------------------------------------------------------
 
+// TestPipelineAllNoisyFallsBackToAllSamples: when every sample lands
+// in the f1 mid band under both probes (all noisy, kept=0) the
+// pipeline falls back to the full synthesized set instead of failing —
+// filter.json records fallback_all and the baseline evaluates every
+// sample. Driven against a real-model-shaped failure: jiuwei-tcm on an
+// f1 extraction task scores partially correct everywhere
+// (tcmsp-30 e2e 20260929-064224, 4/4 noisy).
+func TestPipelineAllNoisyFallsBackToAllSamples(t *testing.T) {
+	dir := t.TempDir()
+	runsDir := filepath.Join(dir, "runs")
+	runID := "20260929-100000-test"
+	synthDir := filepath.Join(filepath.Join(dir, "synth"), runID)
+
+	// f1 mid-band fixtures: the answer is always the expected minus
+	// its last character → p=1, r=3/4, f1≈0.857 for every probe and
+	// the baseline.
+	const spec = `{"name":"tcm_f1","description":"抽取证候","prompt_template":"抽取证候：{input}","metrics":["f1"],"primary_metric":"f1"}`
+	const samples = `{"samples":[
+	 {"id":"n1","input":"恶寒发热无汗脉浮","expected":"风寒束表证","split":"train"},
+	 {"id":"n2","input":"心烦不寐腰膝酸软","expected":"心肾不交证","split":"dev"}
+	]}`
+	const probes = `{"probes":["变体甲：{input}","变体乙：{input}"]}`
+	type row struct{ in, expected string }
+	table := []row{{"恶寒发热无汗脉浮", "风寒束表证"}, {"心烦不寐腰膝酸软", "心肾不交证"}}
+	evalBody := func(body string) string {
+		for _, r := range table {
+			if strings.Contains(body, r.in) {
+				return r.expected[:len(r.expected)-3] // drop the last CJK char
+			}
+		}
+		t.Errorf("evaluation call matched no scripted sample: %.300s", body)
+		return "{}"
+	}
+	srv, bodies := startLLM(t, scriptRouter(t,
+		func() string { return spec },
+		func() string { return samples },
+		func() string { return probes },
+		evalBody,
+	))
+
+	budget := eval.NewBudget(0, 0)
+	var mu sync.Mutex
+	var events []eval.Event
+	p := &Pipeline{
+		RunID: runID, RunsDir: runsDir, SynthDir: synthDir,
+		Prompt:   "从中医病历文本抽取证候",
+		Provider: provider.NewOpenAI(srv.URL, "1", provider.OpenAIConfig{MaxAttempts: 1}),
+		Model:    "jiuwei-tcm", MaxTokens: 256, SynthMaxTokens: 256,
+		SamplesN: 2, ProbeVariants: 2, Workers: 1,
+		Budget: budget, Mode: ModeAutopilot,
+		OnEvent: func(ev eval.Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, ev)
+		},
+	}
+	res, err := p.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Pipeline.Run: %v", err)
+	}
+	if res.ExitCode != 0 || res.Status != core.StatusCompleted {
+		t.Fatalf("result = %s/exit %d, want completed/0", res.Status, res.ExitCode)
+	}
+	if got := len(*bodies); got != 9 { // 3 synth + 2×2 probes + 2 baseline
+		t.Errorf("llm calls = %d, want 9", got)
+	}
+
+	// filter.json: kept=0, every verdict noisy, fallback_all recorded.
+	report, err := LoadFilterReport(synthDir)
+	if err != nil {
+		t.Fatalf("filter.json: %v", err)
+	}
+	if report.Kept != 0 || !report.FallbackAll {
+		t.Fatalf("report kept/fallback = %d/%v, want 0/true", report.Kept, report.FallbackAll)
+	}
+	for _, pv := range report.PerSample {
+		if pv.Verdict != VerdictNoisy {
+			t.Errorf("per_sample %s verdict = %s, want noisy", pv.ID, pv.Verdict)
+		}
+	}
+
+	// The fallback event fired once with the full sample count.
+	mu.Lock()
+	var fallbacks []eval.Event
+	for _, ev := range events {
+		if ev.Type == EventFilterFallback {
+			fallbacks = append(fallbacks, ev)
+		}
+	}
+	mu.Unlock()
+	if len(fallbacks) != 1 || fallbacks[0].Detail["samples"] != 2 {
+		t.Errorf("filter_fallback events = %+v, want one with samples=2", fallbacks)
+	}
+
+	// The baseline evaluated every sample despite kept=0.
+	entries, err := os.ReadDir(filepath.Join(runsDir, runID, "samples"))
+	if err != nil || len(entries) != 2 {
+		t.Errorf("baseline sample traces = %v (%v), want 2", entries, err)
+	}
+	if evals, _ := budget.Snapshot(); evals != 6 { // 2×2 probes + 2 baseline
+		t.Errorf("budget evals = %d, want 6", evals)
+	}
+	// Mid-band f1 shows up in the baseline means (partial credit).
+	if means := res.MetricMeans["f1"]; means <= 0.5 || means >= 0.99 {
+		t.Errorf("baseline f1 mean = %v, want mid-band (~0.857)", means)
+	}
+}
+
 func TestFilterUnmeasuredOnBudgetExhaustion(t *testing.T) {
 	// budget-evals covers probe-1 only: probe-2 gets nothing and every
 	// sample ends with incomplete evidence → unmeasured and kept, never

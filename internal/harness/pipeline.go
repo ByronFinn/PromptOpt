@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,9 +15,10 @@ import (
 // Harness lifecycle events share the eval event envelope and land in
 // the same events.jsonl + SSE stream as the evaluation events.
 const (
-	EventSynthDone  = "synth_done"
-	EventFilterDone = "filter_done"
-	EventCheckpoint = "checkpoint"
+	EventSynthDone      = "synth_done"
+	EventFilterDone     = "filter_done"
+	EventFilterFallback = "filter_fallback"
+	EventCheckpoint     = "checkpoint"
 )
 
 // Pipeline runs the zero-config harness flow for one run id:
@@ -141,7 +141,19 @@ func (p *Pipeline) Run(ctx context.Context) (core.RunResult, error) {
 	}
 	kept := SelectKept(samplesAfter.Samples, &reportAfter)
 	if len(kept) == 0 {
-		return core.RunResult{}, errors.New("过滤后保留样本集为空，无法进行 baseline 评估")
+		// The p¹ filter found no discriminative sample — every sample
+		// classified dead or noisy. Hard-stopping would strand
+		// autopilot runs on a data-quality issue the checkpoint could
+		// have fixed, so fall back to the full synthesized set and
+		// record the fallback loudly in filter.json and the event
+		// stream: the scores will be near-constant and the
+		// optimization report must be read with that in mind.
+		kept = samplesAfter.Samples
+		reportAfter.FallbackAll = true
+		if err := SaveFilterReport(p.SynthDir, reportAfter); err != nil {
+			return core.RunResult{}, fmt.Errorf("save fallback filter.json: %w", err)
+		}
+		p.emit(EventFilterFallback, map[string]any{"samples": len(kept)})
 	}
 
 	engine := &eval.Engine{

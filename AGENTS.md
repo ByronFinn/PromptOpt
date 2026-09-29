@@ -37,8 +37,10 @@ PromptOpt/
 ├── internal/
 │   ├── config/           # flag 默认值与 PROMPTOPT_* 环境变量解析
 │   ├── core/             # Task / Candidate / Dataset / RunResult 模型与 YAML 加载、split 过滤
-│   ├── provider/         # Provider 接口 + OpenAI 兼容实现（重试 / usage 统计）
+│   ├── engine/           # GEPA 优化引擎：反思 / 突变 / Pareto 前沿 / lineage / VistaGuard（Optimizer 接口落位于此）
 │   ├── eval/             # 并行评估引擎：worker 池、指标、Budget 阀门、事件流
+│   ├── harness/          # 零配置合成管线：任务规格/样本合成、p¹ 方差过滤、检查点门
+│   ├── provider/         # Provider 接口 + OpenAI 兼容实现（重试 / usage 统计）
 │   └── web/              # net/http 看板：run 列表 / 详情、SSE 实时事件流（go:embed 模板）
 ├── docs/                 # PRD / ADR / research / agents 约定
 └── examples/             # 示例任务（json_extraction）

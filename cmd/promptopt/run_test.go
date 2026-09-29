@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ByronFinn/PromptOpt/internal/config"
 	"github.com/ByronFinn/PromptOpt/internal/core"
+	"github.com/ByronFinn/PromptOpt/internal/engine"
 	"github.com/ByronFinn/PromptOpt/internal/harness"
 )
 
@@ -272,8 +274,17 @@ var zcScript = []struct {
 	{"发热微恶风寒，咽痛，脉浮数。", "风热犯表", 0, 0},
 }
 
-// startZeroConfigLLM answers synthesis calls by their stage markers
-// and evaluation calls from the scripted score table.
+// Engine marker scripts for the zero-config mock: reflection returns a
+// fixed hypothesis pool, every mutation returns a valid prompt (the
+// kept set answers every candidate identically → clone rejections and
+// a VISTA restart on the stagnation ladder).
+const (
+	zcHypotheses = `{"hypotheses":[{"id":"h1","text":"明确要求只输出证候名称本身","confidence":0.8},{"id":"h2","text":"补充常见证候的辨别要点","confidence":0.6}]}`
+	zcMutation   = `{"id":"g","name":"优化版","prompt":"优化后的辨证提示词。{input}"}`
+)
+
+// startZeroConfigLLM answers synthesis and optimization calls by their
+// stage markers and evaluation calls from the scripted score table.
 func startZeroConfigLLM(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -291,13 +302,23 @@ func startZeroConfigLLM(t *testing.T) *httptest.Server {
 		case strings.Contains(body, harness.MarkerRepair):
 			t.Errorf("unexpected repair call: %.200s", body)
 			content = "{}"
+		case strings.Contains(body, engine.MarkerReflect):
+			content = zcHypotheses
+		case strings.Contains(body, engine.MarkerRewrite),
+			strings.Contains(body, engine.MarkerMerge),
+			strings.Contains(body, engine.MarkerFresh):
+			content = zcMutation
+		case strings.Contains(body, engine.MarkerHypRepair),
+			strings.Contains(body, engine.MarkerCandFix):
+			t.Errorf("unexpected engine repair call: %.200s", body)
+			content = "{}"
 		default:
 			content = "无法辨证"
 			for _, sc := range zcScript {
 				if !strings.Contains(body, sc.input) {
 					continue
 				}
-				score := 1 // baseline always answers correctly
+				score := 1 // every candidate answers the kept sample correctly
 				switch {
 				case strings.Contains(body, "变体甲"):
 					score = sc.p1
@@ -393,15 +414,20 @@ func TestRunZeroConfigEndToEnd(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
 		t.Fatalf("headless stdout is not the run summary JSON: %v\n%s", err, out)
 	}
-	if res.Status != core.StatusCompleted || res.TotalSamples != 1 || res.Evaluated != 1 {
+	// Terminal three-way consistency: stdout status/exit_code match
+	// the process exit code (rounds_done keeps completed/0).
+	if res.Status != core.StatusCompleted || res.ExitCode != code {
+		t.Errorf("summary status/exit = %s/%d, process exit = %d", res.Status, res.ExitCode, code)
+	}
+	if res.TotalSamples != 1 || res.Evaluated != 1 {
 		t.Errorf("summary = %+v, want 1 kept sample evaluated", res)
 	}
 	if res.MetricMeans["exact_match"] != 1 {
 		t.Errorf("means = %+v", res.MetricMeans)
 	}
 
-	// runs/<id>/: manifest carries the zero-config fields, task fields
-	// stay omitted.
+	// runs/<id>/: manifest carries the zero-config fields (including
+	// the derived seed), task fields stay omitted.
 	entries, err := os.ReadDir(outDir)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("run dirs = %v (%v)", entries, err)
@@ -412,6 +438,9 @@ func TestRunZeroConfigEndToEnd(t *testing.T) {
 	if mf["mode"] != string(harness.ModeAutopilot) || mf["synth_samples"] != float64(3) || mf["probe_variants"] != float64(2) {
 		t.Errorf("manifest zero-config fields = %v", mf)
 	}
+	if seed, _ := mf["seed"].(float64); seed <= 0 {
+		t.Errorf("manifest seed = %v, want a derived positive value", mf["seed"])
+	}
 	if _, ok := mf["task"]; ok {
 		t.Errorf("manual-only manifest field task = %v, want omitted", mf["task"])
 	}
@@ -419,6 +448,76 @@ func TestRunZeroConfigEndToEnd(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(outDir, runID, name)); err != nil {
 			t.Errorf("missing artifact %s: %v", name, err)
 		}
+	}
+
+	// Optimization artifacts: lineage, frontier, report, opt calls and
+	// evaluation units all under runs/<id>/.
+	runDir := filepath.Join(outDir, runID)
+	var lineage []engine.LineageRecord
+	loadJSONFile(t, filepath.Join(runDir, "lineage.json"), &lineage)
+	if len(lineage) != 6 { // baseline + 5 default rounds
+		t.Errorf("lineage records = %d, want 6 (baseline + 5 rounds)", len(lineage))
+	}
+	if lineage[0].ID != "baseline" || lineage[0].Operator != engine.OpBaseline {
+		t.Errorf("lineage[0] = %+v, want the baseline seed row", lineage[0])
+	}
+	var frontier struct {
+		Best struct {
+			ID string `json:"id"`
+		} `json:"best"`
+	}
+	loadJSONFile(t, filepath.Join(runDir, "frontier.json"), &frontier)
+	if frontier.Best.ID != "baseline" {
+		t.Errorf("frontier best = %s, want baseline (all children are clones)", frontier.Best.ID)
+	}
+	reportMD, err := os.ReadFile(filepath.Join(runDir, "report.md"))
+	if err != nil || !strings.Contains(string(reportMD), "最优提示词") {
+		t.Errorf("report.md missing Top-1 section (err %v)", err)
+	}
+	if calls, _ := os.ReadDir(filepath.Join(runDir, "opt-calls")); len(calls) == 0 {
+		t.Error("opt-calls/ is empty, want reflection/mutation traces")
+	}
+	if units, _ := os.ReadDir(filepath.Join(runDir, "evals")); len(units) == 0 {
+		t.Error("evals/ is empty, want optimization evaluation units")
+	}
+
+	// events.jsonl: the whole run carries exactly one terminal run_done
+	// (cmd-owned); the engine emitted none and the baseline's inner
+	// one was dropped.
+	eventsB, err := os.ReadFile(filepath.Join(runDir, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read events.jsonl: %v", err)
+	}
+	runDones := 0
+	optimizationRounds := 0
+	vistaRestarts := 0
+	for line := range strings.SplitSeq(strings.TrimSpace(string(eventsB)), "\n") {
+		var ev struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("decode event line: %v", err)
+		}
+		switch ev.Type {
+		case "run_done": // wire string; EventRunDoneForTest is for raw-text checks
+			runDones++
+		case engine.EventRoundStart:
+			optimizationRounds++
+		case engine.EventVistaRestart:
+			vistaRestarts++
+		}
+	}
+	if runDones != 1 {
+		t.Errorf("run_done count = %d, want exactly 1 (cmd terminal)", runDones)
+	}
+	if optimizationRounds != 5 {
+		t.Errorf("round_start count = %d, want 5 (default --max-rounds)", optimizationRounds)
+	}
+	if vistaRestarts != 1 {
+		t.Errorf("vista_restart count = %d, want 1 (stagnation ladder fired)", vistaRestarts)
+	}
+	if !strings.Contains(string(eventsB), `"hypotheses_validated"`) {
+		t.Error("events.jsonl lacks hypotheses_validated (ε-greedy audit trail)")
 	}
 
 	// synth/<id>/: full artifact tree with the anchors slot present.
@@ -471,6 +570,14 @@ func TestRunZeroConfigBudgetEatenByProbesExitsTwo(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("run dirs = %v (%v)", entries, err)
 	}
+	// The skipped-loop path still emits exactly one terminal run_done.
+	eventsB, err := os.ReadFile(filepath.Join(outDir, entries[0].Name(), "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read events.jsonl: %v", err)
+	}
+	if n := strings.Count(string(eventsB), EventRunDoneForTest); n != 1 {
+		t.Errorf("run_done count = %d, want exactly 1 (terminal, baseline-exhausted path)", n)
+	}
 	var report harness.FilterReport
 	loadJSONFile(t, filepath.Join(filepath.Join(outDir, "..", "synth"), entries[0].Name(), "filter.json"), &report)
 	if report.Kept != 3 {
@@ -480,6 +587,62 @@ func TestRunZeroConfigBudgetEatenByProbesExitsTwo(t *testing.T) {
 		if pv.Verdict != harness.VerdictUnmeasured {
 			t.Errorf("sample %s verdict = %s, want unmeasured", pv.ID, pv.Verdict)
 		}
+	}
+}
+
+// TestParseRunFlagsEngineFlags pins the GEPA flag validation surface.
+func TestParseRunFlagsEngineFlags(t *testing.T) {
+	task, cand, ds := fixtureYAMLs(t)
+	base := func(extra ...string) []string {
+		return append([]string{
+			"--task", task, "--candidate", cand, "--dataset", ds,
+			"--base-url", "http://127.0.0.1:9", "--model", "m", "--out", t.TempDir(),
+		}, extra...)
+	}
+	bad := []struct {
+		name string
+		args []string
+	}{
+		{"zero max rounds", base("--max-rounds", "0")},
+		{"zero minibatch", base("--minibatch", "0")},
+		{"zero stagnation limit", base("--stagnation-limit", "0")},
+		{"negative epsilon", base("--epsilon", "-0.1")},
+		{"epsilon above one", base("--epsilon", "1.5")},
+		{"negative seed", base("--seed", "-1")},
+		{"negative opt budget", base("--budget-opt-tokens", "-1")},
+	}
+	for _, tc := range bad {
+		if _, err := parseRunFlags(tc.args); err == nil {
+			t.Errorf("%s: parsed without error", tc.name)
+		}
+	}
+	good := []struct {
+		name string
+		args []string
+	}{
+		{"epsilon bounds", base("--epsilon", "0", "--max-rounds", "1")},
+		{"epsilon one", base("--epsilon", "1")},
+		{"seed and opt budget", base("--seed", "42", "--budget-opt-tokens", "1000")},
+	}
+	for _, tc := range good {
+		o, err := parseRunFlags(tc.args)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if o.maxRounds < 1 || o.minibatch < 1 || o.stagnationLimit < 1 || o.epsilon < 0 || o.epsilon > 1 || o.seed < 0 || o.budgetOptTokens < 0 {
+			t.Errorf("%s: options = %+v", tc.name, o)
+		}
+	}
+	// Defaults come from config.
+	o, err := parseRunFlags(base())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.maxRounds != config.DefaultMaxRounds || o.minibatch != config.DefaultMinibatch ||
+		o.epsilon != config.DefaultEpsilon || o.stagnationLimit != config.DefaultStagnationLimit ||
+		o.budgetOptTokens != 0 || o.seed != 0 {
+		t.Errorf("engine flag defaults = %+v", o)
 	}
 }
 
