@@ -43,7 +43,7 @@ go build -o promptopt ./cmd/promptopt
 
 ### 零配置模式：只有一句提示词
 
-还没有任务 YAML？直接把自然语言提示词作为位置参数交给 `run`，Harness Builder 会自动合成任务规格、评测集与指标（p¹ 方差过滤提纯），经检查点确认后跑 baseline 评估：
+还没有任务 YAML？直接把自然语言提示词作为位置参数交给 `run`，Harness Builder 会自动合成任务规格、评测集与指标（p¹ 方差过滤提纯），经检查点确认后跑 baseline 评估，并接着进入 GEPA 提示词优化：
 
 ```bash
 export PROMPTOPT_BASE_URL=http://localhost:11434/v1   # 任意 OpenAI 兼容端点
@@ -52,13 +52,50 @@ export PROMPTOPT_MODEL=qwen2.5
 promptopt run "从中医病历文本中抽取症状、证型与方剂，输出 JSON" --web
 ```
 
-- 默认全托管：合成 → p¹ 过滤 → 检查点自动放行 → baseline 评估，一气呵成
+- 默认全托管：合成 → p¹ 过滤 → 检查点自动放行 → baseline 评估 → GEPA 优化，一气呵成
 - 加 `--interactive` 则在合成集检查点暂停：浏览器打开审核页增删改样本后点"批准并继续"，或直接编辑 `synth/<run_id>/checkpoint.json`
-- 合成产物落 `synth/<run_id>/`（manifest / spec / samples / filter / checkpoint），评估产物落 `runs/<run_id>/`；看板会给出审核页入口
+- 合成产物落 `synth/<run_id>/`（manifest / spec / samples / filter / checkpoint），评估与优化产物落 `runs/<run_id>/`；看板会给出审核页入口
+
+### 提示词优化（GEPA 引擎）
+
+零配置模式在 baseline 评估之后自动进入 GEPA 反射进化循环：每轮从保留集中抽取 minibatch，反思父提示词的逐样本失败生成自然语言优化假设，假设以"父提示词 + 补充指导"的临时候选实测提升（lift），ε-greedy 选定后经 rewrite / merge / restart 算子突变出新候选，按逐样本分数向量做 Pareto 非支配排序准入前沿；预算耗尽或轮数到达即优雅终止，交付当前最优提示词。
+
+```bash
+promptopt run "从中医病历文本中抽取症状、证型与方剂，输出 JSON" \
+  --max-rounds 5 \
+  --minibatch 4 \
+  --stagnation-limit 3 \
+  --epsilon 0.2 \
+  --seed 0 \
+  --budget-opt-tokens 0
+```
+
+优化相关 flag（均为零配置模式参数，默认值见 `internal/config/config.go`）：
+
+| flag | 默认 | 说明 |
+|---|---|---|
+| `--max-rounds` | 5 | 优化轮数上限（≥1）；跑满即以 `rounds_done` 终止 |
+| `--minibatch` | 4 | 每轮反思抽取的样本数（不足则全取） |
+| `--epsilon` | 0.2 | 假设选择探索率（0~1）：以 ε 概率均匀探索，否则选 minibatch 实测提升最大的假设 |
+| `--stagnation-limit` | 3 | 连续无改进轮数达到该值触发随机重启（`vista_restart` 事件，算子 `restart`） |
+| `--seed` | 0 | 优化随机种子；`0` = 自动派生并记入 manifest，同种子可复现同一条优化轨迹 |
+| `--budget-opt-tokens` | 0（不限） | 优化侧（反思/突变调用）累计 token 阀门，触发后以 `budget_stopped` 终止并交付当前最优 |
+| `--budget-tokens` / `--budget-evals` | 0（不限） | 共享预算：评估侧 token / 评估次数上限，耗尽同样优雅终止输出当前最优（退出码 `2`） |
+
+优化产物（与评估产物同落 `runs/<run_id>/`）：
+
+```text
+runs/<run_id>/
+├── lineage.json         # 候选谱系：父代、算子、假设、逐样本分数、是否准入（全程可追溯）
+├── frontier.json        # 最终 Pareto 前沿 + Top-1 最优提示词全文
+├── report.md            # 中文解释性报告：轮次、预算消耗（分角色）、前沿成员表、取舍说明、谱系
+├── evals/NN-<候选>/     # 每个评估单元（假设探针 / 子代）的逐样本 trace
+└── opt-calls/NNN-<阶段>.json  # 优化侧调用留痕（反思 / 突变 / 修复），含完整请求响应与用量
+```
 
 ### 运行评估（配置模式）
 
-以 [examples/json_extraction](examples/json_extraction/)（中医医疗 NER 抽取）为例：
+已有任务 YAML 时，用显式的 task / candidate / dataset 三件套只做评估（不合成、不优化）。以 [examples/json_extraction](examples/json_extraction/)（中医医疗 NER 抽取）为例：
 
 ```bash
 export PROMPTOPT_BASE_URL=http://localhost:11434/v1   # 任意 OpenAI 兼容端点：vLLM / Ollama / 网关
@@ -74,7 +111,7 @@ promptopt run \
 
 加 `--web` 后浏览器打开 <http://127.0.0.1:17700> 实时查看事件流；退出码与指标汇总见终端输出。
 
-产物落在 `runs/<run_id>/`：
+评估产物落在 `runs/<run_id>/`：
 
 ```text
 runs/<run_id>/
@@ -102,16 +139,18 @@ PromptOpt/
 │   ├── config/           # flag 默认值与 PROMPTOPT_* 环境变量解析
 │   ├── provider/         # OpenAI 兼容 Provider：重试、usage 统计
 │   ├── eval/             # 并行评估引擎：worker 池、exact_match / f1 / json_validator、预算阀门
+│   ├── harness/          # 零配置合成管线：任务规格/样本合成、p¹ 方差过滤、检查点门
+│   ├── engine/           # GEPA 优化引擎：Reflector / Mutator / Pareto 前沿 / VistaGuard / lineage / 报告
 │   └── web/              # 内嵌 Web 看板：run 列表 / 详情、SSE 实时事件流（go:embed 模板）
-├── docs/                 # PRD / ADR / research
+├── docs/                 # PRD / ADR / research / reports
 └── examples/             # 示例任务
 ```
 
-按 [ROADMAP.md](ROADMAP.md) 推进中的模块：`harness/`（AI 合成评测集 + p¹ 方差过滤）、`engine/`（GEPA 反射进化：Reflector / Mutator / Frontier / Budget / VistaGuard）、`optimizers/`（多范式可插拔接口）、`store/`（SQLite，纯 Go 驱动）。
+按 [ROADMAP.md](ROADMAP.md) 推进中的模块：`optimizers/`（多范式可插拔接口，V5）、`store/`（SQLite，纯 Go 驱动）。
 
 ## 当前状态
 
-v2 处于 V0 → V2 已落地阶段：Go 骨架、Provider、并行评估引擎、Web 看板与零配置 Harness Builder（合成 → p¹ 过滤 → 检查点 → baseline 评估，含合成集审核页）可用；GEPA 优化引擎按 V3 里程碑推进。
+v2 处于 V0 → V3 已落地阶段：Go 骨架、Provider、并行评估引擎、Web 看板、零配置 Harness Builder（合成 → p¹ 过滤 → 检查点 → baseline 评估，含合成集审核页）与 GEPA 优化引擎（反思突变 + Pareto 前沿 + VistaGuard 防护 + lineage/报告）均可用；下一步按 V4 里程碑完整化 Web 干预体验。
 
 ## v1（Python）归档
 
