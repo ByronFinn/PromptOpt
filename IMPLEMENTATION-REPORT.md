@@ -191,11 +191,11 @@ CI（`.github/workflows/ci.yml`）与上述本地命令一致（vet / test -race
 | Optimizer 插件接口固化（注册、能力声明、路由元数据） | ✅ | `internal/optimizers/optimizers.go`：`Factory` / `Capabilities` / `Descriptor` / `Registry`（Register 重名/空名/nil panic、`Get` / `Names` 排序 / `Build` 未知名报错列可选）；`Request.Opts map[string]string` + `req.Opt("<paradigm>.<key>")`（internal/engine/optimizer.go）；ADR 0002 的"接口留在 engine"落地 |
 | engine 共享骨架公开化 + Loop 脚手架 | ✅ | `internal/engine/loop.go:48`（`NewLoop`：校验 + baseline 播种，Best 永不为空）、`loop.go:196`（`Admit`）、`calls.go:53`（`NewAdvisor`）、`candidate.go:43`（`ProduceCandidate` = Call + Defend + 质量门）；GEPA 重构为仅保留决策（rng / VISTA 梯子 / 算子阶梯），golden 测试护栏全绿 |
 | 范式路由器 | ✅ | `internal/optimizers/router.go:61-90`：五级有序规则（Pipeline→textgrad、TightBudget→p1、JointFewShot→miprov2、MultiConstraint→gepa、默认→protegi）+ 降级链 `degradeTo{textgrad→protegi, p1→gepa}` + 未注册范式可用性回退 gepa；决策三字段落 manifest（run.go:800-802 `optimizer` / `optimizer_requested` / `optimizer_route_reason`） |
-| ProTeGi 风格（文本梯度定向纠偏） | ⚠️ 实现✅ / 接线缺一行 | `internal/optimizers/protegi/`（protegi.go / bandit.go / gradient.go + 测试）：UCB1 折臂 bandit + 文本梯度 + 沿梯度改写。**builtin 注册行待补**（builtin.go:37-47 仍为注释示例）——`--optimizer protegi` 在 flag 校验被拒（run.go:635-637），auto 默认路由回退 gepa 并在 manifest 记录原因 |
+| ProTeGi 风格（文本梯度定向纠偏） | ✅ | `internal/optimizers/protegi/`（protegi.go / bandit.go / gradient.go + 测试）：UCB1 折臂 bandit + 文本梯度 + 沿梯度改写；已注册进 builtin（`--optimizer protegi` 可达，auto 默认路由不再回退） |
 | MIPROv2 风格（指令+Few-shot 联合搜索） | ✅ | `internal/optimizers/miprov2/`（miprov2.go / demos.go / prompts.go + 测试）：一次提议 I=4 指令变体 + train 样本 demo 子集联合搜索，去泄漏 minibatch 打分→胜者全量准入；等价口径（seeded 联合采样 + 单级 promotion 替代 TPE 逐半淘汰）已在包 doc 记档；已注册（builtin.go:48-59） |
 | EvoPrompt 风格（GA/DE 群体搜索） | ✅ | `internal/optimizers/evoprompt/`（evoprompt.go / operators.go + 测试）：P=6 种群、锦标赛交叉/变异/差分变异（`--evo-variant ga|de`）、精英保留；已注册（builtin.go:60-71），Route 不指向它、仅显式可达 |
 | CLI 接线 | ✅ | `--optimizer`（默认 gepa，config.go:46）/ `--provider` / `--evo-variant` 三 flag（run.go:594-596）；合法集 = builtin.Names() ∪ {auto} 前置校验（run.go:628-637）；`--optimizer` 仅零配置模式生效（run.go:663-664）；路由特征派生 `routeFeatures`（run.go:389-405） |
-| Anthropic 原生 Provider | ⚠️ 实现✅ / CLI 桩 | `internal/provider/anthropic.go`（原生 `/v1/messages` + `x-api-key` + `anthropic-version`、system 抽取、thinking block→ReasoningContent、共享重试核心 `retry.go`）+ anthropic_test.go；**CLI `--provider anthropic` 仍为拒绝桩**（cmd/promptopt/provider.go:18-22），接线待合入一行 |
+| Anthropic 原生 Provider | ✅ | `internal/provider/anthropic.go`（原生 `/v1/messages` + `x-api-key` + `anthropic-version`、system 抽取、thinking block→ReasoningContent、共享重试核心 `retry.go`）+ anthropic_test.go；CLI `--provider anthropic` 已接线（`cmd/promptopt/provider.go` 构造 `NewAnthropic`，`TestNewProviderWiring` 钉住双后端） |
 | Web 范式接线 | ✅ | compare 概览表"范式"行经注册表解析 Label（未注册回退原名）；run.html live 事件 default 分支渲染 `[paradigm] type：stage`（范式专属事件可见） |
 | 插件开发文档 + examples 体系 | ✅ | [docs/plugins.md](docs/plugins.md)：接口与助手签名表、注册表字段、路由规则与升级路径、in-repo 接入三步、marker fake LLM 测试规范、事件契约、预算与产物契约；examples 扩至 3 个（json_extraction / sentiment_classification / text_summarization + examples/README.md 索引），全部含 ≥4 样本 expected 与中文 README |
 
@@ -230,12 +230,11 @@ CI（`.github/workflows/ci.yml`）与上述本地命令一致（vet / test -race
 
 ## 11. 已知边界与未覆盖项
 
-1. **protegi 注册缺口（一行式接线待补）**：`internal/optimizers/builtin/builtin.go:37-47` 的注册行仍为注释示例——`--optimizer protegi` 在 flag 校验被拒（可选值为 `auto, gepa, miprov2, evoprompt`）；auto 默认路由（请求 protegi）经可用性回退落 gepa 并在 manifest 记录原因。docs/plugins.md 头注已按此更新。
-2. **`--provider anthropic` CLI 拒绝桩**：`internal/provider/anthropic.go` 及测试已落地，`cmd/promptopt/provider.go:18-22` 的拒绝文案待替换为 `provider.NewAnthropic(baseURL, apiKey, provider.AnthropicConfig{})` 一行。
-3. **demo GIF 未录制**：环境受限待录（README 已留占位注释；PRD-0000 验收该项相应保持未勾）。
-4. **SQLite 未引入（决议修订）**：artifact 文件承担全部持久化；PRD-0000 已按"难逆转条件不满足"记 PRD 级决议修订（2026-09-30），非 ADR。
-5. **harness 合成无 seed**：多次零配置合成相互独立，严格 A/B 对比需 `--interactive` 检查点或手工三件套（examples/README.md 已如实标注对比局限）。
-6. **TightBudget 路由边界**：走完合成的零配置 run 探针 + baseline 至少消耗 `2×kept` 次评估，故 p1→gepa 路由记录只可能出现在预算耗尽（跳过优化循环）的 run 上（docs/plugins.md §3 已记载）。
+1. **demo GIF 未录制**：环境受限待录（README 已留占位注释；PRD-0000 验收该项相应保持未勾）。
+2. **SQLite 未引入（决议修订）**：artifact 文件承担全部持久化；PRD-0000 已按"难逆转条件不满足"记 PRD 级决议修订（2026-09-30），非 ADR。
+3. **harness 合成无 seed**：多次零配置合成相互独立，严格 A/B 对比需 `--interactive` 检查点或手工三件套（examples/README.md 已如实标注对比局限）。
+4. **TightBudget 路由边界**：走完合成的零配置 run 探针 + baseline 至少消耗 `2×kept` 次评估，故 p1→gepa 路由记录只可能出现在预算耗尽（跳过优化循环）的 run 上（docs/plugins.md §3 已记载）。
+5. **原 protegi 注册缺口与 anthropic CLI 桩已消除**（2026-09-30 补丁提交）：builtin 注册 protegi、`newProvider` 接通 `NewAnthropic`，文档同步更新；auto 默认档现路由 ProTeGi。
 
 ---
 

@@ -763,24 +763,6 @@ var zc3Script = []zcEval{
 	{"发热微恶风寒，咽痛，脉浮数。", "风热犯表", 1, 0},
 }
 
-// runCliStderr invokes runCommand with stderr captured and stdout
-// silenced — the mirror of runCli for error-message assertions.
-func runCliStderr(t *testing.T, args ...string) (int, string) {
-	t.Helper()
-	oldOut, oldErr := os.Stdout, os.Stderr
-	devNull, _ := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stdout, os.Stderr = devNull, w
-	code := runCommand(args)
-	os.Stdout, os.Stderr = oldOut, oldErr
-	_ = w.Close()
-	out, _ := io.ReadAll(r)
-	return code, string(out)
-}
-
 // TestRouteFeatures pins the auto-routing derivation rules (V5 处置①):
 // JointFewShot from train count + verifiable primary, TightBudget from
 // the budget flag vs the retained set, MultiConstraint from the metric
@@ -896,22 +878,18 @@ func TestRunOptimizerProviderUsageErrors(t *testing.T) {
 	}
 }
 
-// TestRunProviderAnthropicNotMerged pins the 处置⑦ error path: until
-// the Anthropic implementation merges, --provider anthropic refuses to
-// start with a clear message and writes no run artifacts.
-func TestRunProviderAnthropicNotMerged(t *testing.T) {
-	outDir := filepath.Join(t.TempDir(), "runs")
-	code, stderr := runCliStderr(t, "某提示词",
-		"--base-url", "http://127.0.0.1:9", "--model", "m",
-		"--out", outDir, "--provider", "anthropic")
-	if code != 1 {
-		t.Fatalf("exit = %d, want 1\n%s", code, stderr)
+// TestNewProviderWiring pins the --provider backends: both registered
+// names construct a client, an unknown name refuses listing the
+// options. The clients are not dialed here — construction only.
+func TestNewProviderWiring(t *testing.T) {
+	for _, name := range []string{"openai", "anthropic"} {
+		p, err := newProvider(name, "http://127.0.0.1:9", "k")
+		if err != nil || p == nil {
+			t.Errorf("newProvider(%q) = %v, %v; want a client", name, p, err)
+		}
 	}
-	if !strings.Contains(stderr, "anthropic") || !strings.Contains(stderr, "openai") {
-		t.Errorf("stderr = %q, want the refusal naming anthropic and openai", stderr)
-	}
-	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
-		t.Errorf("run dirs = %v, want none on an early refusal", entries)
+	if _, err := newProvider("bogus", "http://127.0.0.1:9", "k"); err == nil || !strings.Contains(err.Error(), "anthropic") {
+		t.Errorf("newProvider(bogus) err = %v, want a refusal naming the options", err)
 	}
 }
 

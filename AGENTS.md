@@ -64,7 +64,7 @@ PromptOpt/
 - **输出约定**: 人类可读输出走 stderr；`--headless` 时 stdout 仅输出 JSON 运行摘要（见 [cmd/promptopt/run.go](cmd/promptopt/run.go)）
 - **退出码契约**: `0` 成功；`1` 评估失败或用法错误；`2` 预算耗尽（优先于 `1`）；`3` verify 回归或约束违反（优先级 `2 > 1 > 3`，见 [cmd/promptopt/main.go](cmd/promptopt/main.go)）
 - **命令面**: `run --web` 提供实时 SSE 看板，run 结束后看板驻留（可在前沿看板采纳候选）直至 Ctrl-C；`serve` 浏览历史 run 并提供产物干预端点（`POST /runs/{id}/adopt` 写 adopted.json），仍不暴露实时端点；`verify <run_id>` 对交付候选做锚点/合成保留集回归门禁（退出码 3=回归或约束违反）；`rollback <run_id>` 回退采纳（历史追加 adopted-history.jsonl，`--emit` 导出 candidate.yaml）；`replay <run_id>` 输出完整调用与决策审计时间线（`--headless` 为 JSONL）
-- **多范式**: `--optimizer`（零配置模式专用，默认 gepa，可选 auto 或注册名——以 `--optimizer bogus` 报错清单为准）+ `--evo-variant ga|de`；范式接入步骤见 [docs/plugins.md](docs/plugins.md)。已知接线缺口：protegi 注册行待补（`--optimizer protegi` 暂不可达）；`--provider anthropic` 在 CLI 层为拒绝桩（`internal/provider/anthropic.go` 已落地，接线待合入）
+- **多范式**: `--optimizer`（零配置模式专用，默认 gepa，可选 auto 或注册名——四范式 gepa / protegi / miprov2 / evoprompt 均已注册，auto 默认档路由 ProTeGi）+ `--evo-variant ga|de`；范式接入步骤见 [docs/plugins.md](docs/plugins.md)。`--provider openai|anthropic` 双后端可用（Anthropic 为原生 /v1/messages 客户端）
 
 ## 示例项目
 

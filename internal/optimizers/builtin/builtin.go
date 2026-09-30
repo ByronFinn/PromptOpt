@@ -11,6 +11,7 @@ import (
 	"github.com/ByronFinn/PromptOpt/internal/optimizers"
 	"github.com/ByronFinn/PromptOpt/internal/optimizers/evoprompt"
 	"github.com/ByronFinn/PromptOpt/internal/optimizers/miprov2"
+	"github.com/ByronFinn/PromptOpt/internal/optimizers/protegi"
 )
 
 // Registry returns the in-repo paradigm registry. GEPA ships in the
@@ -34,17 +35,18 @@ func Registry() *optimizers.Registry {
 		},
 		Factory: func() engine.Optimizer { return &engine.Gepa{} },
 	})
-	// V5 paradigm registrations land here as their subpackages merge —
-	// the pattern, for reference:
-	//
-	//	reg.Register(optimizers.Descriptor{
-	//		Capabilities: optimizers.Capabilities{
-	//			Name: "protegi", Label: "ProTeGi 文本梯度", Summary: "…", Paper: "…",
-	//			SuitsDirectional: true,
-	//		},
-	//		Factory: func() engine.Optimizer { return protegi.New() },
-	//	})
-	//	// … evoprompt 同样各一行 …
+	reg.Register(optimizers.Descriptor{
+		Capabilities: optimizers.Capabilities{
+			Name:  "protegi",
+			Label: "ProTeGi 文本梯度",
+			Summary: "UCB1 折臂 bandit 选 minibatch、失败批评为自然语言文本梯度、沿梯度改写候选后全保留集评估，共享 Loop 帕累托准入（beam width 1 简化）",
+			Paper:  "Automatic Prompt Optimization with Gradient Descent and Beam Search (Yang et al., EMNLP 2023)",
+			// Directional text-gradient feedback loop; the auto router's
+			// default rule and the textgrad degrade chain both land here.
+			SuitsDirectional: true,
+		},
+		Factory: func() engine.Optimizer { return protegi.New() },
+	})
 	reg.Register(optimizers.Descriptor{
 		Capabilities: optimizers.Capabilities{
 			Name:    "miprov2",
