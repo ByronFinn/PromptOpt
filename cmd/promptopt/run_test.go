@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/ByronFinn/PromptOpt/internal/core"
 	"github.com/ByronFinn/PromptOpt/internal/engine"
 	"github.com/ByronFinn/PromptOpt/internal/harness"
+	"github.com/ByronFinn/PromptOpt/internal/optimizers/builtin"
 )
 
 // writeYAML creates a temp YAML file from s and returns its path.
@@ -265,10 +267,7 @@ const zcProbes = `{"probes":["变体甲：输出证候名：{input}","变体乙�
 
 // zcScript pins the probe evidence per sample: a1 is dead easy, a3 is
 // dead hard, a2 discriminates and is the only kept sample.
-var zcScript = []struct {
-	input, expected string
-	p1, p2          int
-}{
+var zcScript = []zcEval{
 	{"恶寒发热，无汗，脉浮紧。", "风寒束表", 1, 1},
 	{"心烦不寐，腰膝酸软，脉细数。", "心肾不交", 1, 0},
 	{"发热微恶风寒，咽痛，脉浮数。", "风热犯表", 0, 0},
@@ -283,9 +282,25 @@ const (
 	zcMutation   = `{"id":"g","name":"优化版","prompt":"优化后的辨证提示词。{input}"}`
 )
 
+// zcEval is one scripted probe row: which probe variants answer the
+// sample correctly.
+type zcEval struct {
+	input, expected string
+	p1, p2          int
+}
+
 // startZeroConfigLLM answers synthesis and optimization calls by their
 // stage markers and evaluation calls from the scripted score table.
 func startZeroConfigLLM(t *testing.T) *httptest.Server {
+	t.Helper()
+	return startScriptedZeroConfigLLM(t, zcSamples, zcScript)
+}
+
+// startScriptedZeroConfigLLM is the parameterized zero-config mock:
+// synthesis answers with samplesJSON, evaluation calls score from the
+// script table (non-probe candidates answer every kept sample
+// correctly).
+func startScriptedZeroConfigLLM(t *testing.T, samplesJSON string, script []zcEval) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -296,7 +311,7 @@ func startZeroConfigLLM(t *testing.T) *httptest.Server {
 		case strings.Contains(body, harness.MarkerSpec):
 			content = zcSpec
 		case strings.Contains(body, harness.MarkerSamples):
-			content = zcSamples
+			content = samplesJSON
 		case strings.Contains(body, harness.MarkerProbes):
 			content = zcProbes
 		case strings.Contains(body, harness.MarkerRepair):
@@ -314,11 +329,11 @@ func startZeroConfigLLM(t *testing.T) *httptest.Server {
 			content = "{}"
 		default:
 			content = "无法辨证"
-			for _, sc := range zcScript {
+			for _, sc := range script {
 				if !strings.Contains(body, sc.input) {
 					continue
 				}
-				score := 1 // every candidate answers the kept sample correctly
+				score := 1 // every candidate answers the kept samples correctly
 				switch {
 				case strings.Contains(body, "变体甲"):
 					score = sc.p1
@@ -726,5 +741,244 @@ func TestRunZeroConfigUsageErrors(t *testing.T) {
 		if code, _ := runCli(t, tc.args...); code != 1 {
 			t.Errorf("%s: exit = %d, want 1", tc.name, code)
 		}
+	}
+}
+
+// --- optimizer/provider surface (V5 skeleton) --------------------------------
+
+// zc3Samples keeps two train splits — the fixture the auto/miprov2 e2e
+// cases route on (JointFewShot derivable from the retained set).
+const zc3Samples = `{"samples":[
+ {"id":"b1","input":"恶寒发热，无汗，脉浮紧。","expected":"风寒束表","split":"train"},
+ {"id":"b2","input":"心烦不寐，腰膝酸软，脉细数。","expected":"心肾不交","split":"train"},
+ {"id":"b3","input":"发热微恶风寒，咽痛，脉浮数。","expected":"风热犯表","split":"dev"}
+]}`
+
+// zc3Script keeps all three samples discriminative (probe 1 passes,
+// probe 2 fails), so the retained set is the full 3 — unlike zcScript
+// whose kept=1 anchors the GEPA clone-rejection assertions.
+var zc3Script = []zcEval{
+	{"恶寒发热，无汗，脉浮紧。", "风寒束表", 1, 0},
+	{"心烦不寐，腰膝酸软，脉细数。", "心肾不交", 1, 0},
+	{"发热微恶风寒，咽痛，脉浮数。", "风热犯表", 1, 0},
+}
+
+// runCliStderr invokes runCommand with stderr captured and stdout
+// silenced — the mirror of runCli for error-message assertions.
+func runCliStderr(t *testing.T, args ...string) (int, string) {
+	t.Helper()
+	oldOut, oldErr := os.Stdout, os.Stderr
+	devNull, _ := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = devNull, w
+	code := runCommand(args)
+	os.Stdout, os.Stderr = oldOut, oldErr
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	return code, string(out)
+}
+
+// TestRouteFeatures pins the auto-routing derivation rules (V5 处置①):
+// JointFewShot from train count + verifiable primary, TightBudget from
+// the budget flag vs the retained set, MultiConstraint from the metric
+// count, Pipeline without a V5 declaration source.
+func TestRouteFeatures(t *testing.T) {
+	task := core.Task{Name: "t", Metrics: []string{"exact_match"}}
+	kept := []core.Sample{
+		{ID: "a", Split: "train"}, {ID: "b", Split: "train"}, {ID: "c", Split: "dev"},
+	}
+
+	f := routeFeatures(task, kept, 0)
+	if !f.JointFewShot || f.TightBudget || f.MultiConstraint || f.Pipeline {
+		t.Errorf("features = %+v, want JointFewShot only", f)
+	}
+	// One train sample is not demo material.
+	if f := routeFeatures(task, kept[1:], 0); f.JointFewShot {
+		t.Errorf("features = %+v, want JointFewShot false with train=1", f)
+	}
+	// A custom metric has no per-sample automatic verdict.
+	if f := routeFeatures(core.Task{Metrics: []string{"rouge"}}, kept, 0); f.JointFewShot {
+		t.Errorf("features = %+v, want JointFewShot false for rouge", f)
+	}
+	// Setting a budget alone is not tight: below 2×kept is.
+	if f := routeFeatures(task, kept, 6); f.TightBudget {
+		t.Errorf("features = %+v, want TightBudget false at 2×kept", f)
+	}
+	if f := routeFeatures(task, kept, 5); !f.TightBudget {
+		t.Errorf("features = %+v, want TightBudget true below 2×kept", f)
+	}
+	if f := routeFeatures(task, kept, 0); f.TightBudget {
+		t.Errorf("features = %+v, want TightBudget false without a budget", f)
+	}
+	if f := routeFeatures(core.Task{Metrics: []string{"exact_match", "f1"}}, kept, 0); !f.MultiConstraint {
+		t.Errorf("features = %+v, want MultiConstraint true", f)
+	}
+}
+
+// TestParseRunFlagsOptimizerProvider pins the new flag validation:
+// up-front --optimizer checks against the builtin registry (both
+// modes), the manual-mode exclusion of paradigm flags, the evoprompt
+// binding of --evo-variant and the provider name surface.
+func TestParseRunFlagsOptimizerProvider(t *testing.T) {
+	task, cand, ds := fixtureYAMLs(t)
+	manual := []string{"--task", task, "--candidate", cand, "--dataset", ds,
+		"--base-url", "http://127.0.0.1:9", "--model", "m", "--out", t.TempDir()}
+	zc := []string{"--base-url", "http://127.0.0.1:9", "--model", "m", "--out", t.TempDir(), "某提示词"}
+
+	bad := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"bogus optimizer manual", append(slices.Clone(manual), "--optimizer", "bogus"), "available"},
+		{"bogus optimizer zero-config", append(slices.Clone(zc), "--optimizer", "bogus"), "bogus"},
+		{"explicit optimizer in manual mode", append(slices.Clone(manual), "--optimizer", "gepa"), "zero-config"},
+		{"evo-variant in manual mode", append(slices.Clone(manual), "--evo-variant", "ga"), "zero-config"},
+		{"evo-variant without evoprompt", append(slices.Clone(zc), "--optimizer", "gepa", "--evo-variant", "ga"), "evoprompt"},
+		{"bad evo-variant value", append(slices.Clone(zc), "--evo-variant", "x"), "ga or de"},
+		{"bad provider", append(slices.Clone(zc), "--provider", "bogus"), "openai or anthropic"},
+	}
+	for _, tc := range bad {
+		_, err := parseRunFlags(tc.args)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want it to contain %q", tc.name, err, tc.want)
+		}
+	}
+	// The bogus list names the registered options (auto + registry);
+	// derive the expectation from the same registry so it stays true
+	// as paradigms join instead of pinning a stale name set.
+	wantOpts := append(builtin.Registry().Names(), "auto")
+	slices.Sort(wantOpts)
+	_, err := parseRunFlags(append(slices.Clone(manual), "--optimizer", "nope"))
+	if err == nil || !strings.Contains(err.Error(), strings.Join(wantOpts, ", ")) {
+		t.Errorf("bogus optimizer error = %v, want the option list %s", err, strings.Join(wantOpts, ", "))
+	}
+
+	// Defaults come from config; auto is accepted in zero-config mode.
+	o, err := parseRunFlags(zc)
+	if err != nil {
+		t.Fatalf("zero-config defaults: %v", err)
+	}
+	if o.optimizer != config.DefaultOptimizer || o.providerName != config.DefaultProvider || o.evoVariant != config.DefaultEvoVariant {
+		t.Errorf("flag defaults = %s/%s/%s", o.optimizer, o.providerName, o.evoVariant)
+	}
+	if _, err := parseRunFlags(append(slices.Clone(zc), "--optimizer", "auto")); err != nil {
+		t.Errorf("--optimizer auto rejected: %v", err)
+	}
+}
+
+// TestRunOptimizerProviderUsageErrors drives the error paths through
+// the CLI: every case exits 1 before any LLM dial.
+func TestRunOptimizerProviderUsageErrors(t *testing.T) {
+	srv := startFakeLLM(t)
+	task, cand, ds := fixtureYAMLs(t)
+	out := filepath.Join(t.TempDir(), "runs")
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"bogus optimizer", []string{"--task", task, "--candidate", cand, "--dataset", ds,
+			"--base-url", srv.URL, "--model", "m", "--out", out, "--optimizer", "nope"}},
+		{"optimizer in manual mode", []string{"--task", task, "--candidate", cand, "--dataset", ds,
+			"--base-url", srv.URL, "--model", "m", "--out", out, "--optimizer", "gepa"}},
+		{"evo-variant with gepa", []string{"某提示词", "--base-url", srv.URL, "--model", "m",
+			"--out", out, "--optimizer", "gepa", "--evo-variant", "ga"}},
+		{"bogus provider", []string{"某提示词", "--base-url", srv.URL, "--model", "m",
+			"--out", out, "--provider", "nope"}},
+	}
+	for _, tc := range cases {
+		if code, _ := runCli(t, tc.args...); code != 1 {
+			t.Errorf("%s: exit = %d, want 1", tc.name, code)
+		}
+	}
+}
+
+// TestRunProviderAnthropicNotMerged pins the 处置⑦ error path: until
+// the Anthropic implementation merges, --provider anthropic refuses to
+// start with a clear message and writes no run artifacts.
+func TestRunProviderAnthropicNotMerged(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "runs")
+	code, stderr := runCliStderr(t, "某提示词",
+		"--base-url", "http://127.0.0.1:9", "--model", "m",
+		"--out", outDir, "--provider", "anthropic")
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1\n%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "anthropic") || !strings.Contains(stderr, "openai") {
+		t.Errorf("stderr = %q, want the refusal naming anthropic and openai", stderr)
+	}
+	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
+		t.Errorf("run dirs = %v, want none on an early refusal", entries)
+	}
+}
+
+// TestRunZeroConfigExplicitOptimizerGepa: the explicit --optimizer
+// gepa run completes and the manifest records the paradigm, the
+// request and the explicit-route reason.
+func TestRunZeroConfigExplicitOptimizerGepa(t *testing.T) {
+	srv := startZeroConfigLLM(t)
+	outDir := filepath.Join(t.TempDir(), "runs")
+
+	code, out := runCli(t, "从中医医案文本判断证候",
+		"--base-url", srv.URL, "--model", "jiuwei-tcm",
+		"--out", outDir, "--headless", "--samples", "3", "--probe-variants", "2",
+		"--optimizer", "gepa")
+	if code != 0 {
+		t.Fatalf("exit = %d, stdout:\n%s", code, out)
+	}
+	entries, err := os.ReadDir(outDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("run dirs = %v (%v)", entries, err)
+	}
+	var mf map[string]any
+	loadJSONFile(t, filepath.Join(outDir, entries[0].Name(), "manifest.json"), &mf)
+	if mf["optimizer"] != "gepa" || mf["optimizer_requested"] != "gepa" {
+		t.Errorf("manifest optimizer fields = %v/%v, want gepa/gepa", mf["optimizer"], mf["optimizer_requested"])
+	}
+	if reason, _ := mf["optimizer_route_reason"].(string); !strings.Contains(reason, "显式指定") {
+		t.Errorf("manifest route reason = %q, want the explicit-route note", reason)
+	}
+	if mf["provider"] != "openai" || mf["evo_variant"] != "ga" {
+		t.Errorf("manifest provider/evo_variant = %v/%v, want openai/ga", mf["provider"], mf["evo_variant"])
+	}
+}
+
+// TestRunZeroConfigAutoTightBudgetRoutesP1ToGepa pins the anchored
+// auto-routing acceptance: a small --budget-evals flags TightBudget
+// (below 2× the retained 3), auto requests p1 and degrades onto gepa.
+// The probes starve the budget (exit 2, baseline undispatched), but
+// routing resolves before the skip and the manifest records
+// requested/paradigm/reason — with train=2 in the fixture this also
+// pins that budget affordability outranks the JointFewShot rule.
+func TestRunZeroConfigAutoTightBudgetRoutesP1ToGepa(t *testing.T) {
+	srv := startScriptedZeroConfigLLM(t, zc3Samples, zc3Script)
+	outDir := filepath.Join(t.TempDir(), "runs")
+
+	code, out := runCli(t, "从中医医案文本判断证候",
+		"--base-url", srv.URL, "--model", "jiuwei-tcm",
+		"--out", outDir, "--headless", "--samples", "3", "--probe-variants", "2",
+		"--optimizer", "auto", "--budget-evals", "3")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 (baseline budget-starved)\n%s", code, out)
+	}
+	entries, err := os.ReadDir(outDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("run dirs = %v (%v)", entries, err)
+	}
+	var mf map[string]any
+	loadJSONFile(t, filepath.Join(outDir, entries[0].Name(), "manifest.json"), &mf)
+	if mf["optimizer_requested"] != "p1" {
+		t.Errorf("manifest optimizer_requested = %v, want p1 (tight budget)", mf["optimizer_requested"])
+	}
+	if mf["optimizer"] != "gepa" {
+		t.Errorf("manifest optimizer = %v, want gepa (p1 degraded)", mf["optimizer"])
+	}
+	if reason, _ := mf["optimizer_route_reason"].(string); reason == "" {
+		t.Error("manifest optimizer_route_reason is empty")
+	} else if !strings.Contains(reason, "p1") || !strings.Contains(reason, "gepa") {
+		t.Errorf("manifest route reason = %q, want it to name p1 and gepa", reason)
 	}
 }

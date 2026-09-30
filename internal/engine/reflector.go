@@ -46,17 +46,17 @@ type Hypothesis struct {
 // Reflector turns a parent's minibatch evidence into at most n
 // hypotheses via one optimizer-role call (plus at most one repair).
 type Reflector struct {
-	adv *advisor
+	adv *Advisor
 }
 
 // NewReflector returns a reflector dialing through adv.
-func NewReflector(adv *advisor) *Reflector { return &Reflector{adv: adv} }
+func NewReflector(adv *Advisor) *Reflector { return &Reflector{adv: adv} }
 
 // Reflect builds the reflection context (task spec, parent prompt,
 // per-sample input/expected/response/scores/ASI diagnosis, ancestor
 // lessons) and parses the hypothesis pool.
 func (r *Reflector) Reflect(ctx context.Context, task core.Task, parent core.Candidate, lessons []string, batch []SampleRecord, n int) ([]Hypothesis, error) {
-	raw, err := r.adv.call(ctx, "reflect", buildReflectPrompt(task, parent, lessons, batch, n))
+	raw, err := r.adv.Call(ctx, "reflect", buildReflectPrompt(task, parent, lessons, batch, n))
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (r *Reflector) Reflect(ctx context.Context, task core.Task, parent core.Can
 		}
 		return nil
 	}
-	payload, err := defend(ctx, r.adv, "reflect", MarkerHypRepair, raw, check)
+	payload, err := Defend(ctx, r.adv, "reflect", MarkerHypRepair, raw, check)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func normalizeHypotheses(pool []Hypothesis, n int) []Hypothesis {
 		if len(out) >= n {
 			break
 		}
-		text := truncateRunes(strings.TrimSpace(cleanInputLiteral(h.Text)), maxHypoTextRunes)
+		text := TruncateRunes(strings.TrimSpace(CleanInputLiteral(h.Text)), maxHypoTextRunes)
 		if text == "" {
 			continue
 		}
@@ -103,18 +103,19 @@ func normalizeHypotheses(pool []Hypothesis, n int) []Hypothesis {
 	return out
 }
 
-// cleanInputLiteral removes {input} literals from model text before it
+// CleanInputLiteral removes {input} literals from model text before it
 // is spliced into a prompt: rendering is plain replacement
 // (core.RenderPrompt), so a stray literal would inject sample text
-// into guidance sections.
-func cleanInputLiteral(s string) string {
+// into guidance sections. Paradigms embedding model output into
+// guidance sections share it.
+func CleanInputLiteral(s string) string {
 	return strings.ReplaceAll(s, core.InputPlaceholder, "")
 }
 
 func clamp01(v float64) float64 { return min(max(v, 0), 1) }
 
 // truncateRunes caps s to n runes without splitting one.
-func truncateRunes(s string, n int) string {
+func TruncateRunes(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
 		return s
@@ -139,8 +140,8 @@ func buildReflectPrompt(task core.Task, parent core.Candidate, lessons []string,
 
 ## 逐样本表现（共 %d 条）
 `, MarkerReflect, task.Name, task.Description, strings.Join(task.Metrics, ", "), task.Primary(),
-		truncateRunes(task.PromptTemplate, maxParentPromptRunes),
-		truncateRunes(parent.Prompt, maxParentPromptRunes), len(batch))
+		TruncateRunes(task.PromptTemplate, maxParentPromptRunes),
+		TruncateRunes(parent.Prompt, maxParentPromptRunes), len(batch))
 	for _, rec := range batch {
 		expected, _ := json.Marshal(rec.Sample.Expected)
 		fmt.Fprintf(&b, `
@@ -152,9 +153,9 @@ func buildReflectPrompt(task core.Task, parent core.Candidate, lessons []string,
 - 诊断：%s
 `,
 			rec.Sample.ID,
-			truncateRunes(rec.Sample.Input, maxSampleInputRunes),
-			truncateRunes(string(expected), maxSampleInputRunes),
-			truncateRunes(rec.Response, maxResponseRunes),
+			TruncateRunes(rec.Sample.Input, maxSampleInputRunes),
+			TruncateRunes(string(expected), maxSampleInputRunes),
+			TruncateRunes(rec.Response, maxResponseRunes),
 			formatScores(rec.Scores),
 			formatDiagnosis(rec.Diagnosis),
 		)
@@ -162,7 +163,7 @@ func buildReflectPrompt(task core.Task, parent core.Candidate, lessons []string,
 	if len(lessons) > 0 {
 		b.WriteString("\n## 祖先教训\n")
 		for _, lesson := range lessons {
-			fmt.Fprintf(&b, "- %s\n", truncateRunes(lesson, maxHypoTextRunes))
+			fmt.Fprintf(&b, "- %s\n", TruncateRunes(lesson, maxHypoTextRunes))
 		}
 	}
 	fmt.Fprintf(&b, `
@@ -193,7 +194,7 @@ func formatDiagnosis(diagnosis map[string]string) string {
 	}
 	parts := make([]string, 0, len(diagnosis))
 	for _, k := range slices.Sorted(maps.Keys(diagnosis)) {
-		parts = append(parts, fmt.Sprintf("%s: %s", k, truncateRunes(diagnosis[k], 200)))
+		parts = append(parts, fmt.Sprintf("%s: %s", k, TruncateRunes(diagnosis[k], 200)))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -290,10 +291,10 @@ func stripOneFence(s string) string {
 	return strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
 }
 
-// defend runs the three-level JSON defense: local extraction, then one
+// Defend runs the three-level JSON defense: local extraction, then one
 // LLM repair call (parse and semantic failures share it), then an
 // error carrying a raw excerpt.
-func defend[T any](ctx context.Context, a *advisor, stage, repairMarker, raw string, check func(T) error) (T, error) {
+func Defend[T any](ctx context.Context, a *Advisor, stage, repairMarker, raw string, check func(T) error) (T, error) {
 	var zero T
 	if strings.TrimSpace(raw) == "" {
 		// An empty response cannot be repaired — the escalation ladder
@@ -312,7 +313,7 @@ func defend[T any](ctx context.Context, a *advisor, stage, repairMarker, raw str
 	} else {
 		problems = []string{"响应不是合法的 JSON 对象"}
 	}
-	repaired, err := a.call(ctx, stage+"-repair", buildJSONRepairPrompt(raw, repairMarker, problems...))
+	repaired, err := a.Call(ctx, stage+"-repair", buildJSONRepairPrompt(raw, repairMarker, problems...))
 	if err != nil {
 		return zero, excerptError(stage, raw, err)
 	}

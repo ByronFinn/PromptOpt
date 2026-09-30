@@ -52,6 +52,7 @@
   <thead><tr><th></th><th>A · {{.A}}</th><th>B · {{.B}}</th></tr></thead>
   <tbody>
     <tr><th>run</th><td><a class="mono" href="/runs/{{.A}}">{{.A}}</a></td><td><a class="mono" href="/runs/{{.B}}">{{.B}}</a></td></tr>
+    <tr><th>范式</th><td>{{if .SideA.OptimizerLabel}}<span class="mono">{{.SideA.OptimizerLabel}}</span>{{else}}—{{end}}</td><td>{{if .SideB.OptimizerLabel}}<span class="mono">{{.SideB.OptimizerLabel}}</span>{{else}}—{{end}}</td></tr>
     <tr><th>状态</th><td><span class="{{.SideA.StatusClass}}">{{.SideA.Status}}</span></td><td><span class="{{.SideB.StatusClass}}">{{.SideB.Status}}</span></td></tr>
     <tr><th>exit</th><td class="mono">{{.SideA.ExitCode}}</td><td class="mono">{{.SideB.ExitCode}}</td></tr>
     <tr><th>优化轮数</th><td>{{.SideA.Rounds}}{{if .SideA.ReasonLabel}}（{{.SideA.ReasonLabel}}）{{end}}</td><td>{{.SideB.Rounds}}{{if .SideB.ReasonLabel}}（{{.SideB.ReasonLabel}}）{{end}}</td></tr>

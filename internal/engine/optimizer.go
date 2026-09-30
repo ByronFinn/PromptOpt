@@ -1,7 +1,13 @@
-// Package engine implements the GEPA reflective-evolution optimizer
-// core: minibatch reflection, hypothesis validation (VISTA decoupling),
-// three mutation operators, a Pareto frontier over per-sample primary
-// scores, candidate lineage and the run report.
+// Package engine hosts the optimization core shared by every paradigm:
+// the Optimizer interface and Request contract, the per-run Loop
+// scaffold (baseline seeding, unit evaluation, frontier admission,
+// artifacts), the optimizer-side LLM Advisor with its JSON defenses,
+// and the reflective helpers (Reflector, Mutator, VistaGuard). GEPA —
+// minibatch reflection, hypothesis validation, the operator ladder, a
+// Pareto frontier over per-sample primary scores, candidate lineage
+// and the run report — is the reference implementation; V5 paradigm
+// subpackages live under internal/optimizers and register through
+// internal/optimizers/builtin (docs/plugins.md).
 package engine
 
 import (
@@ -116,6 +122,20 @@ type Request struct {
 	RunID   string
 	RunDir  string // runs/<id>/; artifacts land beside the baseline run
 	OnEvent func(eval.Event)
+
+	// Opts carries paradigm-specific options keyed by convention
+	// "<paradigm>.<key>" (e.g. "evoprompt.variant" = ga|de). The engine
+	// core ignores it; Request.Opt is the single accessor paradigms
+	// read their knobs through, so the flag surface stays additive.
+	Opts map[string]string
+}
+
+// Opt returns the paradigm option under key, "" when unset.
+func (r Request) Opt(key string) string {
+	if r.Opts == nil {
+		return ""
+	}
+	return r.Opts[key]
 }
 
 // validate reports Request-level precondition violations.

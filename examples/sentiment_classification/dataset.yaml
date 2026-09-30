@@ -1,0 +1,46 @@
+# v2 数据集：内联 6 条中文电商评论情感样本（train 2 / dev 2 / test 2）
+# expected 为单个标签字符串，与 exact_match 的字符串比较契约一致（去首尾空白、大小写敏感）
+name: ecommerce_sentiment
+
+samples:
+  - id: train-001
+    input: |
+      收到了，包装很结实，物流也快。上手第一感觉做工扎实，
+      续航比我想象的好，两天重度使用还剩三成电。这个价位真的很值，已经推荐给同事了。
+    expected: positive
+    split: train
+
+  - id: train-002
+    input: |
+      用了一周来评价：屏幕右上角有坏点，客服让我自己跑检测软件，
+      跑完又说截图不清楚，来回扯皮三天不给换。第一次买这个牌子，也是最后一次。
+    expected: negative
+    split: train
+
+  - id: dev-001
+    input: |
+      本来抱着试试看的心态买的，毕竟价格摆在这里。
+      结果音质出乎意料，低音下潜够深，佩戴也舒服，通勤戴两个小时耳朵不疼。
+    expected: positive
+    split: dev
+
+  - id: dev-002
+    input: |
+      商品描述里写的纯棉，到手一摸明显化纤感，洗了一次就起球。
+      尺码也偏大两码，退货还要自己付运费。不推荐。
+    expected: negative
+    split: dev
+
+  - id: test-001
+    input: |
+      想问下买过的朋友，这款适配器能给 16 寸笔记本充电吗？
+      页面上写的功率参数我看不太懂。
+    expected: neutral
+    split: test
+
+  - id: test-002
+    input: |
+      这是给公司采购的第三批，同事反馈两极：做设计的说色彩准，
+      做文字的说字体发虚。我个人没长期用，不做评价。
+    expected: neutral
+    split: test

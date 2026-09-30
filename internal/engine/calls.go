@@ -15,25 +15,26 @@ import (
 	"github.com/ByronFinn/PromptOpt/internal/provider"
 )
 
-// errOptBudget is the sentinel for a tripped optimizer-side token
-// valve; the main loop converts it to reason=budget_stopped.
-var errOptBudget = errors.New("optimizer token budget exhausted")
+// ErrOptBudget is the sentinel for a tripped optimizer-side token
+// valve; a paradigm's main loop converts it to reason=budget_stopped.
+var ErrOptBudget = errors.New("optimizer token budget exhausted")
 
 // maxOptAttempts bounds the empty-content escalation ladder: a
 // reasoning model can burn the whole completion cap on reasoning, so
 // the cap doubles per attempt (floor → 2× → 4×) before failing.
 const maxOptAttempts = 3
 
-// advisor performs optimizer-side LLM calls (reflection, mutation,
+// Advisor performs optimizer-side LLM calls (reflection, mutation,
 // repairs): every attempt is traced under RunDir/opt-calls/NNN-<stage>
 // .json, successful usage is metered into the shared budget under the
 // optimizer role (which never arms the executor soft stop), and every
 // dial is gated by the optimizer token valve (OptBudgetTokens,
 // cumulative optimizer-role usage, synthesis included; 0 = unlimited).
 // The escalation ladder mirrors harness.Synthesizer
-// (synthesize.go:147-217); kept private to avoid a reverse dependency
-// on harness — merge candidate for V5.
-type advisor struct {
+// (synthesize.go:147-217). V5 makes it the shared dial tone of every
+// paradigm: construct one through NewLoop (or NewAdvisor) and pass it
+// to Reflector/Mutator/Defend/ProduceCandidate.
+type Advisor struct {
 	provider        provider.Provider
 	model           string
 	optMaxTokens    int
@@ -48,8 +49,9 @@ type advisor struct {
 	valveFired bool
 }
 
-func newAdvisor(req Request) *advisor {
-	return &advisor{
+// NewAdvisor builds the optimizer-side dialer for one run request.
+func NewAdvisor(req Request) *Advisor {
+	return &Advisor{
 		provider:        req.Provider,
 		model:           req.Model,
 		optMaxTokens:    req.OptMaxTokens,
@@ -62,7 +64,7 @@ func newAdvisor(req Request) *advisor {
 }
 
 // ValveTripped reports whether the optimizer-side valve is armed.
-func (a *advisor) ValveTripped() bool {
+func (a *Advisor) ValveTripped() bool {
 	if a.optBudgetTokens <= 0 {
 		return false
 	}
@@ -71,10 +73,10 @@ func (a *advisor) ValveTripped() bool {
 }
 
 // ValveFired reports whether the valve event was ever emitted.
-func (a *advisor) ValveFired() bool { return a.valveFired }
+func (a *Advisor) ValveFired() bool { return a.valveFired }
 
 // notifyValve emits the optimizer-role budget_stop event once.
-func (a *advisor) notifyValve() {
+func (a *Advisor) notifyValve() {
 	if a.valveFired || a.onEvent == nil {
 		a.valveFired = true
 		return
@@ -86,12 +88,12 @@ func (a *advisor) notifyValve() {
 	})
 }
 
-// call dials one optimizer-side request through the escalation
+// Call dials one optimizer-side request through the escalation
 // ladder. The valve is checked before every dial.
-func (a *advisor) call(ctx context.Context, stage, prompt string) (string, error) {
+func (a *Advisor) Call(ctx context.Context, stage, prompt string) (string, error) {
 	if a.ValveTripped() {
 		a.notifyValve()
-		return "", errOptBudget
+		return "", ErrOptBudget
 	}
 	if err := os.MkdirAll(a.dir, 0o755); err != nil {
 		return "", fmt.Errorf("create opt-calls dir: %w", err)
@@ -126,7 +128,7 @@ func (a *advisor) call(ctx context.Context, stage, prompt string) (string, error
 // escalations — writes its own trace file with its own sequence
 // number. Usage counts even when the content is empty: the tokens
 // were spent either way.
-func (a *advisor) chat(ctx context.Context, stage, prompt string, tokenCap int) (provider.ChatResponse, error) {
+func (a *Advisor) chat(ctx context.Context, stage, prompt string, tokenCap int) (provider.ChatResponse, error) {
 	a.seq++
 	req := provider.ChatRequest{
 		Model:     a.model,

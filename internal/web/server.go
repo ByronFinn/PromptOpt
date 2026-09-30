@@ -416,11 +416,13 @@ type budgetGauge struct {
 	Rows []budgetRow
 }
 
-// runManifestLimits is the budget-relevant subset of manifest.json.
+// runManifestLimits is the budget-relevant subset of manifest.json,
+// plus the optimizer paradigm the run was routed to.
 type runManifestLimits struct {
-	BudgetTokens    int64 `json:"budget_tokens"`
-	BudgetEvals     int64 `json:"budget_evals"`
-	BudgetOptTokens int64 `json:"budget_opt_tokens,omitempty"`
+	BudgetTokens    int64  `json:"budget_tokens"`
+	BudgetEvals     int64  `json:"budget_evals"`
+	BudgetOptTokens int64  `json:"budget_opt_tokens,omitempty"`
+	Optimizer       string `json:"optimizer,omitempty"`
 }
 
 // readManifestLimits decodes manifest.json; a missing or malformed

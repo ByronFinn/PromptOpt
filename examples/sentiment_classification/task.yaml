@@ -1,0 +1,13 @@
+# v2 任务规范：中文电商评论情感三分类
+name: sentiment_classification
+description: 判断中文电商商品评论的整体情感倾向，输出 positive / negative / neutral 三个标签之一。
+
+prompt_template: |
+  你是电商评论情感分析助手。请阅读下面的用户评论，判断其整体情感倾向。
+  只输出 positive、negative、neutral 三个英文小写标签之一，不要输出任何其他内容。
+
+  评论：
+  {input}
+
+metrics: [exact_match]
+primary_metric: exact_match

@@ -238,6 +238,14 @@ document.getElementById('replay-btn').addEventListener('click', () => {
         doneSeen = true;
         logOpt('run 结束：' + ev.status + '（exit ' + ev.exit_code + '）· 看板驻留至 Ctrl-C');
         break;
+      default:
+        // Paradigm-specific events (gradient_done, propose_done,
+        // joint_done, population_updated …) carry Detail{paradigm,
+        // stage} per the docs/plugins.md event contract; surface them
+        // so long rounds never look stuck. sample_start/run_start
+        // stay silent (row-level progress / never forwarded).
+        if (ev.type !== 'sample_start' && ev.type !== 'run_start')
+          logOpt((d.paradigm ? '[' + d.paradigm + '] ' : '') + ev.type + (d.stage ? '：' + d.stage : ''));
     }
     render();
   };

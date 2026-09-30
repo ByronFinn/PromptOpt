@@ -166,6 +166,11 @@ type compareSideView struct {
 	ID                  string
 	Status, StatusClass string
 	ExitCode            int
+	// Optimizer is the paradigm name from manifest.json (empty for
+	// pre-V5 runs); OptimizerLabel is its registry-resolved display
+	// name, falling back to the raw name for unregistered paradigms.
+	Optimizer           string
+	OptimizerLabel      string
 	HasSummary          bool
 	Metrics             map[string]float64
 	Usage               map[core.Role]core.Usage
@@ -247,6 +252,8 @@ func (s *Server) compareSide(id string) compareSideView {
 	} else {
 		side.Status, side.StatusClass = "未完成", "dim"
 	}
+	side.Optimizer = readManifestLimits(runDir).Optimizer
+	side.OptimizerLabel = optimizerLabel(side.Optimizer)
 	f, err := engine.LoadFrontier(runDir)
 	if err != nil {
 		return side

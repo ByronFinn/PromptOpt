@@ -34,9 +34,9 @@ func startOptLLM(t *testing.T, route func(body string) string) (*httptest.Server
 	return srv, bodies
 }
 
-func testAdvisor(t *testing.T, srv *httptest.Server) *advisor {
+func testAdvisor(t *testing.T, srv *httptest.Server) *Advisor {
 	t.Helper()
-	return &advisor{
+	return &Advisor{
 		provider:     provider.NewOpenAI(srv.URL, "1", provider.OpenAIConfig{MaxAttempts: 1}),
 		model:        "fake-model",
 		optMaxTokens: 1024,
@@ -179,9 +179,9 @@ func TestReflectorEmptyResponseShortCircuits(t *testing.T) {
 	type payload struct {
 		Hypotheses []Hypothesis `json:"hypotheses"`
 	}
-	_, err := defend[payload](t.Context(), adv, "reflect", MarkerHypRepair, "", func(payload) error { return nil })
+	_, err := Defend[payload](t.Context(), adv, "reflect", MarkerHypRepair, "", func(payload) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "空") {
-		t.Fatalf("defend on empty raw = %v, want 空-content error", err)
+		t.Fatalf("Defend on empty raw = %v, want 空-content error", err)
 	}
 	if len(*bodies) != 0 {
 		t.Errorf("repair fired %d times on empty raw, want 0", len(*bodies))
@@ -336,7 +336,7 @@ func TestAdvisorEscalationLadderAndUsage(t *testing.T) {
 	defer ladder.Close()
 	adv := testAdvisor(t, ladder)
 	adv.optMaxTokens = 4096
-	got, err := adv.call(t.Context(), "stage", "prompt")
+	got, err := adv.Call(t.Context(), "stage", "prompt")
 	if err != nil || got != "好的" {
 		t.Fatalf("call = %q err = %v", got, err)
 	}

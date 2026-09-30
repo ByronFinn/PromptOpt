@@ -877,3 +877,57 @@ func TestHostGuardBlocksRebinding(t *testing.T) {
 		t.Errorf("GET with loopback Host = %d, want 200", res.StatusCode)
 	}
 }
+
+// --- ⑫ V5 paradigm surface: compare row + live default branch -------------------
+
+// TestComparePageParadigmRow: the compare overview renders the
+// paradigm row per side, resolving names through the builtin registry
+// (registered → label, old runs without the manifest field → —).
+func TestComparePageParadigmRow(t *testing.T) {
+	runsDir := t.TempDir()
+	idA := "20260929-150000-p1"
+	writeFrontierFixture(t, runsDir, idA)
+	writeJSONT(t, filepath.Join(runsDir, idA, "manifest.json"), map[string]any{
+		"optimizer": "gepa",
+	})
+	idB := "20260929-160000-p2"
+	writeFrontierFixture(t, runsDir, idB) // pre-V5 run: no optimizer field
+
+	res := get(t, mustURL(t, NewServer(runsDir, "", nil).Handler(), "/compare?a="+idA+"&b="+idB))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("compare = %d: %s", res.StatusCode, res.Body)
+	}
+	if !strings.Contains(res.Body, "<th>范式</th>") {
+		t.Error("compare overview lacks the paradigm row header")
+	}
+	if !strings.Contains(res.Body, "GEPA 反射进化") {
+		t.Error("side A does not render the registry-resolved paradigm label")
+	}
+	// Side B has no manifest optimizer: its cell shows the dash while
+	// A's label is present — the row degrades for old runs.
+	start := strings.Index(res.Body, "<th>范式</th>")
+	if start < 0 || !strings.Contains(res.Body[start:start+400], "—") {
+		t.Errorf("paradigm row does not dash the pre-V5 side: %s", res.Body[start:start+400])
+	}
+}
+
+// TestRunPageLiveDefaultBranchShips is the template smoke for 处置⑨:
+// the live event switch carries a default branch so paradigm-specific
+// events (Detail{paradigm, stage}) render as one line instead of
+// being swallowed.
+func TestRunPageLiveDefaultBranchShips(t *testing.T) {
+	runsDir := t.TempDir()
+	id := "20260929-170000-p3"
+	writeFrontierFixture(t, runsDir, id)
+	h := NewServer(runsDir, "", NewBus()).Handler()
+
+	res := get(t, mustURL(t, h, "/runs/"+id))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("run page = %d: %s", res.StatusCode, res.Body)
+	}
+	for _, want := range []string{"default:", "d.paradigm", "sample_start"} {
+		if !strings.Contains(res.Body, want) {
+			t.Errorf("live script missing %q (default branch not shipped)", want)
+		}
+	}
+}

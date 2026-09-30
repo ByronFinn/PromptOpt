@@ -1,0 +1,13 @@
+# v2 任务规范：中文资讯一句话摘要
+name: text_summarization
+description: 将中文资讯段落压缩为一句话摘要，保留核心事实（主体、事件、关键结果）。
+
+prompt_template: |
+  你是中文资讯摘要助手。请阅读下面的段落，用一句话（不超过 40 个字）概括其核心事实，
+  保留主体、事件与关键结果，只输出摘要本身，不要输出任何其他内容。
+
+  段落：
+  {input}
+
+metrics: [f1]
+primary_metric: f1

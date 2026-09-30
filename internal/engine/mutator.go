@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -16,11 +15,11 @@ import (
 // the quality gate — non-empty prompt carrying the {input}
 // placeholder — with one repair call before failing.
 type Mutator struct {
-	adv *advisor
+	adv *Advisor
 }
 
 // NewMutator returns a mutator dialing through adv.
-func NewMutator(adv *advisor) *Mutator { return &Mutator{adv: adv} }
+func NewMutator(adv *Advisor) *Mutator { return &Mutator{adv: adv} }
 
 // Rewrite rewrites the parent under the selected hypothesis.
 func (m *Mutator) Rewrite(ctx context.Context, task core.Task, parent core.Candidate, sel Hypothesis, lessons []string) (core.Candidate, error) {
@@ -39,41 +38,10 @@ func (m *Mutator) Fresh(ctx context.Context, task core.Task) (core.Candidate, er
 	return m.produce(ctx, "fresh", buildFreshPrompt(task))
 }
 
-// candidatePayload is the mutator's wire format.
-type candidatePayload struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Prompt      string `json:"prompt"`
-}
-
 // produce runs one mutation call plus the quality gate and its single
-// repair attempt.
+// repair attempt — the shared engine.ProduceCandidate scaffold.
 func (m *Mutator) produce(ctx context.Context, stage, prompt string) (core.Candidate, error) {
-	raw, err := m.adv.call(ctx, stage, prompt)
-	if err != nil {
-		return core.Candidate{}, fmt.Errorf("%s: %w", stage, err)
-	}
-	check := func(p candidatePayload) error {
-		text := strings.TrimSpace(p.Prompt)
-		if text == "" {
-			return errors.New("prompt 为空")
-		}
-		if !strings.Contains(text, core.InputPlaceholder) {
-			return errors.New("prompt 缺少 {input} 占位符")
-		}
-		return nil
-	}
-	payload, err := defend(ctx, m.adv, stage, MarkerCandFix, raw, check)
-	if err != nil {
-		return core.Candidate{}, err
-	}
-	return core.Candidate{
-		ID:          strings.TrimSpace(payload.ID),
-		Name:        strings.TrimSpace(payload.Name),
-		Description: strings.TrimSpace(payload.Description),
-		Prompt:      strings.TrimSpace(payload.Prompt),
-	}, nil
+	return ProduceCandidate(ctx, m.adv, stage, prompt)
 }
 
 // --- meta prompts ---------------------------------------------------------
@@ -100,7 +68,7 @@ func lessonsSection(lessons []string) string {
 	var b strings.Builder
 	b.WriteString("\n## 祖先教训\n")
 	for _, lesson := range lessons {
-		fmt.Fprintf(&b, "- %s\n", truncateRunes(lesson, maxHypoTextRunes))
+		fmt.Fprintf(&b, "- %s\n", TruncateRunes(lesson, maxHypoTextRunes))
 	}
 	return b.String()
 }
@@ -118,7 +86,7 @@ func buildRewritePrompt(task core.Task, parent core.Candidate, sel Hypothesis, l
 %s
 
 %s`,
-		MarkerRewrite, specSection(task), truncateRunes(parent.Prompt, maxParentPromptRunes),
+		MarkerRewrite, specSection(task), TruncateRunes(parent.Prompt, maxParentPromptRunes),
 		sel.ID, sel.Confidence, sel.Text, lessonsSection(lessons), mutationOutputSpec)
 }
 
@@ -139,8 +107,8 @@ func buildMergePrompt(task core.Task, parent, complement core.Candidate, sel Hyp
 
 %s`,
 		MarkerMerge, specSection(task),
-		truncateRunes(parent.Prompt, maxParentPromptRunes),
-		truncateRunes(complement.Prompt, maxParentPromptRunes),
+		TruncateRunes(parent.Prompt, maxParentPromptRunes),
+		TruncateRunes(complement.Prompt, maxParentPromptRunes),
 		sel.ID, sel.Text, lessonsSection(lessons), mutationOutputSpec)
 }
 
@@ -152,5 +120,5 @@ func buildFreshPrompt(task core.Task) string {
 
 %s`,
 		MarkerFresh, specSection(task),
-		truncateRunes(task.PromptTemplate, maxParentPromptRunes), mutationOutputSpec)
+		TruncateRunes(task.PromptTemplate, maxParentPromptRunes), mutationOutputSpec)
 }

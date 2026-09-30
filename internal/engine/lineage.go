@@ -91,7 +91,7 @@ func (l *Lineage) Lessons(id string, limit int) []string {
 					break
 				}
 				if text := strings.TrimSpace(h.Text); text != "" {
-					lessons = append(lessons, fmt.Sprintf("%s：%s", rec.ID, truncateRunes(text, maxHypoTextRunes)))
+					lessons = append(lessons, fmt.Sprintf("%s：%s", rec.ID, TruncateRunes(text, maxHypoTextRunes)))
 				}
 			}
 			next = append(next, rec.Parents...)

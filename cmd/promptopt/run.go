@@ -28,6 +28,8 @@ import (
 	"github.com/ByronFinn/PromptOpt/internal/engine"
 	"github.com/ByronFinn/PromptOpt/internal/eval"
 	"github.com/ByronFinn/PromptOpt/internal/harness"
+	"github.com/ByronFinn/PromptOpt/internal/optimizers"
+	"github.com/ByronFinn/PromptOpt/internal/optimizers/builtin"
 	"github.com/ByronFinn/PromptOpt/internal/provider"
 	"github.com/ByronFinn/PromptOpt/internal/web"
 )
@@ -37,6 +39,7 @@ type runOptions struct {
 	taskPath, candidatePath, datasetPath  string
 	split, baseURL, model, apiKey, outDir string
 	addr, prompt                          string
+	optimizer, providerName, evoVariant   string
 	maxTokens, budgetTokens, budgetEvals  int
 	workers, samples, probeVariants       int
 	maxRounds, minibatch, stagnationLimit int
@@ -91,6 +94,12 @@ func runManual(o runOptions) int {
 		return exitFailure
 	}
 
+	prov, err := newProvider(o.providerName, o.baseURL, o.apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
+		return exitFailure
+	}
+
 	runID := newRunID()
 	runDir := filepath.Join(o.outDir, runID)
 	sink, err := startSink(o, runDir, "")
@@ -106,7 +115,7 @@ func runManual(o runOptions) int {
 		TaskPath: o.taskPath, CandidatePath: o.candidatePath, DatasetPath: o.datasetPath,
 		Model: o.model, BaseURL: o.baseURL, MaxTokens: o.maxTokens, Workers: o.workers,
 		BudgetTokens: int64(o.budgetTokens), BudgetEvals: int64(o.budgetEvals),
-		Samples: len(samples),
+		Samples: len(samples), Provider: o.providerName,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		sink.close()
@@ -126,7 +135,7 @@ func runManual(o runOptions) int {
 		RunID: runID, RunDir: runDir, Model: o.model, MaxTokens: o.maxTokens,
 		Workers: o.workers, Metrics: task.Metrics, Split: o.split,
 		Budget:   eval.NewBudget(int64(o.budgetTokens), int64(o.budgetEvals)),
-		Provider: provider.NewOpenAI(o.baseURL, o.apiKey, provider.OpenAIConfig{}),
+		Provider: prov,
 		TaskName: task.Name, CandidateID: cand.ID, DatasetName: dataset.Name,
 		OnEvent: sink.fanout.emit,
 	}
@@ -157,6 +166,11 @@ func runManual(o runOptions) int {
 // Exactly one terminal run_done is emitted here, after the exit code
 // is finalized.
 func runSynthesized(o runOptions) int {
+	prov, err := newProvider(o.providerName, o.baseURL, o.apiKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
+		return exitFailure
+	}
 	runID := newRunID()
 	runDir := filepath.Join(o.outDir, runID)
 	synthBase := synthRoot(o.outDir)
@@ -190,6 +204,7 @@ func runSynthesized(o runOptions) int {
 		MaxRounds: o.maxRounds, Minibatch: o.minibatch, Epsilon: o.epsilon,
 		StagnationLimit: o.stagnationLimit, Seed: o.seed,
 		BudgetOptTokens: o.budgetOptTokens,
+		Optimizer:       o.optimizer, Provider: o.providerName, EvoVariant: o.evoVariant,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		sink.close()
@@ -197,7 +212,6 @@ func runSynthesized(o runOptions) int {
 	}
 
 	budget := eval.NewBudget(int64(o.budgetTokens), int64(o.budgetEvals))
-	prov := provider.NewOpenAI(o.baseURL, o.apiKey, provider.OpenAIConfig{})
 	pipeline := &harness.Pipeline{
 		RunID: runID, RunsDir: o.outDir,
 		SynthDir: filepath.Join(synthBase, runID),
@@ -231,6 +245,17 @@ func runSynthesized(o runOptions) int {
 		primary = spec.Task.Primary()
 	}
 
+	// Resolve the optimizer paradigm now that the retained set is
+	// known and record the route in the manifest. This runs even when
+	// the baseline exhausted the budget and the loop will be skipped:
+	// the manifest then still documents which paradigm the run was
+	// bound to (routing is a configuration fact, not a completion
+	// fact).
+	opt, routeErr := resolveOptimizer(runDir, filepath.Join(synthBase, runID), o)
+	if routeErr != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", routeErr)
+	}
+
 	// Baseline budget-exhausted (or aborted): skip the loop, emit the
 	// terminal run_done and keep the exit contract (2 / 1).
 	if res.Status != core.StatusCompleted {
@@ -238,9 +263,15 @@ func runSynthesized(o runOptions) int {
 		return finishRun(o, sink, res, runDir, primary, nil)
 	}
 
-	optRes, err := runOptimization(sink.ctx, runID, runDir, filepath.Join(synthBase, runID), o, prov, budget, collector, emit)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
+	var optRes engine.Result
+	var optErr error
+	if opt == nil {
+		optErr = routeErr
+	} else {
+		optRes, optErr = runOptimization(sink.ctx, runID, runDir, filepath.Join(synthBase, runID), o, prov, budget, collector, emit, opt)
+	}
+	if optErr != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", optErr)
 		res.Status = core.StatusFailed
 		res.ExitCode = exitFailure
 	} else {
@@ -264,28 +295,70 @@ func runSynthesized(o runOptions) int {
 	emit(engine.NewUsageEvent(budget, runID, "terminal"))
 	fanoutTerminalRunDone(sink.fanout.emit, res)
 	var best *engine.Result
-	if err == nil {
+	if optErr == nil {
 		best = &optRes
 	}
 	return finishRun(o, sink, res, runDir, primary, best)
 }
 
-// runOptimization drives the GEPA loop over the retained sample set:
-// it recomputes the kept samples (the checkpoint pause may have edited
-// them), harvests the baseline records and wires the engine request.
-func runOptimization(ctx context.Context, runID, runDir, synthDir string, o runOptions,
-	prov *provider.Client, budget *eval.Budget, collector *engine.RecordCollector, emit func(eval.Event)) (engine.Result, error) {
+// resolveOptimizer picks the run's paradigm and rewrites the
+// manifest's routing fields. The retained set is only known after the
+// synthesis pipeline, so the initial manifest snapshot carries the
+// requested --optimizer value and this rewrite lands once routing is
+// resolved. It runs even when the baseline exhausted the budget — the
+// manifest then documents which paradigm the run was bound to.
+func resolveOptimizer(runDir, synthDir string, o runOptions) (engine.Optimizer, error) {
 	spec, err := harness.LoadSpec(synthDir)
 	if err != nil {
-		return engine.Result{}, fmt.Errorf("reload spec.json: %w", err)
+		return nil, fmt.Errorf("reload spec.json: %w", err)
 	}
+	kept, err := retainedSamples(synthDir)
+	if err != nil {
+		return nil, err
+	}
+	reg := builtin.Registry()
+	decision := optimizers.Decision{
+		Paradigm: o.optimizer, Requested: o.optimizer,
+		Reason: fmt.Sprintf("显式指定 %s（未走 auto 路由）", o.optimizer),
+	}
+	if o.optimizer == "auto" {
+		decision = optimizers.Route(reg, routeFeatures(spec.Task, kept, int64(o.budgetEvals)))
+	}
+	if err := rewriteManifestRoute(runDir, decision, o); err != nil {
+		return nil, err
+	}
+	return reg.Build(decision.Paradigm)
+}
+
+// rewriteManifestRoute patches manifest.json's optimizer routing
+// fields (and the evo variant snapshot) once routing is resolved.
+func rewriteManifestRoute(runDir string, decision optimizers.Decision, o runOptions) error {
+	path := filepath.Join(runDir, "manifest.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read manifest.json: %w", err)
+	}
+	var mf runManifest
+	if err := json.Unmarshal(b, &mf); err != nil {
+		return fmt.Errorf("decode manifest.json: %w", err)
+	}
+	mf.Optimizer = decision.Paradigm
+	mf.OptimizerRequested = decision.Requested
+	mf.OptimizerRouteReason = decision.Reason
+	mf.EvoVariant = o.evoVariant
+	return writeJSONFile(path, mf)
+}
+
+// retainedSamples reloads the synthesis artifacts and applies the p¹
+// filter's kept verdicts — the checkpoint pause may have edited them.
+func retainedSamples(synthDir string) ([]core.Sample, error) {
 	samples, err := harness.LoadSamples(synthDir)
 	if err != nil {
-		return engine.Result{}, fmt.Errorf("reload samples.json: %w", err)
+		return nil, fmt.Errorf("reload samples.json: %w", err)
 	}
 	report, err := harness.LoadFilterReport(synthDir)
 	if err != nil {
-		return engine.Result{}, fmt.Errorf("reload filter.json: %w", err)
+		return nil, fmt.Errorf("reload filter.json: %w", err)
 	}
 	kept := harness.SelectKept(samples.Samples, &report)
 	if len(kept) == 0 {
@@ -294,9 +367,56 @@ func runOptimization(ctx context.Context, runID, runDir, synthDir string, o runO
 		// consistent with that decision here. A kept==0 report without
 		// the fallback flag remains a hard error.
 		if !report.FallbackAll {
-			return engine.Result{}, errors.New("过滤后保留样本集为空，无法进行优化")
+			return nil, errors.New("过滤后保留样本集为空，无法进行优化")
 		}
 		kept = samples.Samples
+	}
+	return kept, nil
+}
+
+// routeFeatures derives the auto-routing input from the task, the
+// retained set and the eval budget flag. The derivation is pinned
+// here (unit-testable, no hidden state); V6 upgrades the heuristics
+// to task-level structured declarations (docs/plugins.md):
+//
+//   - Pipeline has no V5 declaration source and stays false;
+//   - JointFewShot needs ≥2 train samples plus a verifiable primary
+//     metric — joint instruction+demo search is pointless without
+//     demo material or an automatic verdict;
+//   - TightBudget marks a budget below two full retained-set passes
+//     (setting a budget alone is not "tight");
+//   - MultiConstraint is any multi-metric task.
+func routeFeatures(task core.Task, kept []core.Sample, budgetEvals int64) optimizers.TaskFeatures {
+	train := 0
+	for _, s := range kept {
+		if s.Split == "train" {
+			train++
+		}
+	}
+	return optimizers.TaskFeatures{
+		JointFewShot:    train >= 2 && slices.Contains(verifiablePrimaries, task.Primary()),
+		TightBudget:     budgetEvals > 0 && budgetEvals < 2*int64(len(kept)),
+		MultiConstraint: len(task.Metrics) > 1,
+	}
+}
+
+// verifiablePrimaries are the per-sample auto-judged metrics — the
+// prerequisite for scoring demo-augmented candidates on a minibatch.
+var verifiablePrimaries = []string{"exact_match", "f1", "json_validator"}
+
+// runOptimization drives the resolved optimizer over the retained
+// sample set: it recomputes the kept samples (the checkpoint pause may
+// have edited them), harvests the baseline records and wires the
+// engine request with the paradigm options injected.
+func runOptimization(ctx context.Context, runID, runDir, synthDir string, o runOptions,
+	prov provider.Provider, budget *eval.Budget, collector *engine.RecordCollector, emit func(eval.Event), opt engine.Optimizer) (engine.Result, error) {
+	spec, err := harness.LoadSpec(synthDir)
+	if err != nil {
+		return engine.Result{}, fmt.Errorf("reload spec.json: %w", err)
+	}
+	kept, err := retainedSamples(synthDir)
+	if err != nil {
+		return engine.Result{}, err
 	}
 	// The finalized kept set makes the run self-contained for trace
 	// views (sample id → input/expected join).
@@ -321,9 +441,9 @@ func runOptimization(ctx context.Context, runID, runDir, synthDir string, o runO
 		OptBudgetTokens: o.budgetOptTokens,
 		RunID:           runID, RunDir: runDir,
 		OnEvent: emit,
+		Opts:    map[string]string{"evoprompt.variant": o.evoVariant},
 	}
-	gepa := &engine.Gepa{}
-	return gepa.Optimize(ctx, req)
+	return opt.Optimize(ctx, req)
 }
 
 // fanoutTerminalRunDone emits the single terminal run_done carrying
@@ -449,7 +569,7 @@ func finishRun(o runOptions, sink *runSink, res core.RunResult, runDir, primary 
 // before or after it.
 func parseRunFlags(args []string) (runOptions, error) {
 	var o runOptions
-	addrSet := false
+	addrSet, optimizerSet, evoVariantSet := false, false, false
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&o.taskPath, "task", "", "task YAML path (required without a positional prompt)")
@@ -471,6 +591,9 @@ func parseRunFlags(args []string) (runOptions, error) {
 	fs.IntVar(&o.stagnationLimit, "stagnation-limit", config.DefaultStagnationLimit, "stagnant rounds before a fresh restart (zero-config mode)")
 	fs.Int64Var(&o.seed, "seed", 0, "optimization rng seed (0 = derive and record in the manifest)")
 	fs.Int64Var(&o.budgetOptTokens, "budget-opt-tokens", 0, "optimizer token budget, cumulative (0 = unlimited)")
+	fs.StringVar(&o.optimizer, "optimizer", config.DefaultOptimizer, "optimizer paradigm: a registered name or auto (zero-config mode; see docs/plugins.md)")
+	fs.StringVar(&o.providerName, "provider", config.DefaultProvider, "LLM provider backend (openai|anthropic)")
+	fs.StringVar(&o.evoVariant, "evo-variant", config.DefaultEvoVariant, "evoprompt variant: ga|de (requires --optimizer evoprompt)")
 	fs.BoolVar(&o.interactive, "interactive", false, "pause at the synthesis checkpoint for manual review (zero-config mode)")
 	fs.StringVar(&o.outDir, "out", "", "run output directory (env PROMPTOPT_OUT, default runs/)")
 	fs.StringVar(&o.addr, "addr", config.DefaultAddr, "dashboard listen address (requires --web)")
@@ -484,8 +607,13 @@ func parseRunFlags(args []string) (runOptions, error) {
 		return o, err
 	}
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "addr" {
+		switch f.Name {
+		case "addr":
 			addrSet = true
+		case "optimizer":
+			optimizerSet = true
+		case "evo-variant":
+			evoVariantSet = true
 		}
 	})
 	switch fs.NArg() {
@@ -497,6 +625,23 @@ func parseRunFlags(args []string) (runOptions, error) {
 	}
 
 	var errs []error
+	// --optimizer is validated up front against the builtin registry
+	// (plus "auto") in both modes: failing before the synthesis
+	// pipeline runs beats burning its budget only to error at Build
+	// time.
+	validOptimizers := builtin.Registry().Names()
+	validOptimizers = append(validOptimizers, "auto")
+	slices.Sort(validOptimizers)
+	if !slices.Contains(validOptimizers, o.optimizer) {
+		errs = append(errs, fmt.Errorf("--optimizer %q is not a registered paradigm (available: %s)",
+			o.optimizer, strings.Join(validOptimizers, ", ")))
+	}
+	if o.providerName != "openai" && o.providerName != "anthropic" {
+		errs = append(errs, fmt.Errorf("--provider must be openai or anthropic, got %q", o.providerName))
+	}
+	if o.evoVariant != "ga" && o.evoVariant != "de" {
+		errs = append(errs, fmt.Errorf("--evo-variant must be ga or de, got %q", o.evoVariant))
+	}
 	if o.prompt != "" {
 		// Zero-config mode: the positional prompt replaces the YAML
 		// trio and the split selector.
@@ -508,7 +653,19 @@ func parseRunFlags(args []string) (runOptions, error) {
 				errs = append(errs, fmt.Errorf("the positional prompt is mutually exclusive with %s", c.flag))
 			}
 		}
+		// --evo-variant only steers the evoprompt paradigm.
+		if evoVariantSet && o.optimizer != "evoprompt" {
+			errs = append(errs, fmt.Errorf("--evo-variant only takes effect with --optimizer evoprompt (got %q)", o.optimizer))
+		}
 	} else {
+		// The configured mode runs no optimization loop: the paradigm
+		// flags must not pass silently.
+		if optimizerSet {
+			errs = append(errs, errors.New("--optimizer only takes effect in the zero-config mode (the configured mode runs no optimization loop)"))
+		}
+		if evoVariantSet {
+			errs = append(errs, errors.New("--evo-variant only takes effect in the zero-config mode"))
+		}
 		for _, req := range []struct{ flag, val string }{
 			{"--task", o.taskPath}, {"--candidate", o.candidatePath}, {"--dataset", o.datasetPath},
 		} {
@@ -637,6 +794,14 @@ type runManifest struct {
 	Prompt        string    `json:"prompt,omitempty"`
 	SynthSamples  int       `json:"synth_samples,omitempty"`
 	ProbeVariants int       `json:"probe_variants,omitempty"`
+	// Optimizer routing: the initial snapshot carries the requested
+	// --optimizer value; resolveOptimizer rewrites the final paradigm,
+	// the request and the route reason once the retained set is known.
+	Optimizer            string `json:"optimizer,omitempty"`
+	OptimizerRequested   string `json:"optimizer_requested,omitempty"`
+	OptimizerRouteReason string `json:"optimizer_route_reason,omitempty"`
+	Provider             string `json:"provider,omitempty"`
+	EvoVariant           string `json:"evo_variant,omitempty"`
 	// GEPA engine settings (zero-config mode only; seed always records
 	// the derived actual value when --seed 0).
 	MaxRounds       int     `json:"max_rounds,omitempty"`

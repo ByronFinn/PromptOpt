@@ -1,0 +1,11 @@
+# v2 候选提示词：基线（直接指令 + 标签枚举约束，不含判别规则）
+id: baseline
+name: baseline
+description: 基线候选：直接指令加标签枚举约束，不含任何判别规则与 few-shot 示例。
+
+prompt: |
+  请判断下面这条电商评论的情感倾向，
+  只输出 positive、negative、neutral 三个英文小写标签之一：
+
+  评论：
+  {input}

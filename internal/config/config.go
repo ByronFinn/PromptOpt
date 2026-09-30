@@ -41,6 +41,11 @@ const (
 	DefaultMinibatch       = 4   // samples drawn per round
 	DefaultEpsilon         = 0.2 // exploration rate of hypothesis selection
 	DefaultStagnationLimit = 3   // stagnant rounds before a Fresh restart
+
+	// Multi-paradigm surface defaults (V5).
+	DefaultOptimizer  = "gepa"   // --optimizer default (see internal/optimizers/builtin)
+	DefaultProvider   = "openai" // --provider default
+	DefaultEvoVariant = "ga"     // --evo-variant default (evoprompt paradigm)
 	// DefaultOptMaxTokens: optimizer-side calls (reflection, mutation)
 	// return long JSON after heavy reasoning — give them the same
 	// generous completion floor as synthesis; no 4096-level clamping.
