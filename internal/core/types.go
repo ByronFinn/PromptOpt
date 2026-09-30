@@ -96,7 +96,10 @@ type RunResult struct {
 }
 
 // SampleTrace records the evaluation of a single sample; it is
-// serialized to samples/<id>.json.
+// serialized to samples/<id>.json. Usage is the sample's total
+// evaluation spend — the executor call plus the judge call when the
+// llm_judge metric is declared; DurationMS stays the executor call
+// alone and JudgeMS, when set, is the judge call's latency.
 type SampleTrace struct {
 	SampleID   string             `json:"sample_id"`
 	Role       Role               `json:"role"`
@@ -108,4 +111,5 @@ type SampleTrace struct {
 	Error      string             `json:"error,omitempty"`
 	Usage      Usage              `json:"usage"`
 	DurationMS int64              `json:"duration_ms"`
+	JudgeMS    int64              `json:"judge_ms,omitempty"`
 }

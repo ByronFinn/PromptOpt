@@ -31,7 +31,11 @@ const (
 // Event is one observable pipeline step. It feeds the live SSE stream
 // and the events.jsonl replay log; sample_done carries the request and
 // response summaries plus usage so a finished run can be replayed
-// offline (reasoning text lives in the per-call traces only).
+// offline (reasoning text lives in the per-call traces only). Usage on
+// sample_done is the sample's total evaluation spend — the executor
+// call plus the judge call when the llm_judge metric is declared;
+// LatencyMS stays the executor call alone and JudgeMS, when set, is
+// the judge call's latency.
 type Event struct {
 	Type          string                   `json:"type"`
 	Time          time.Time                `json:"time"`
@@ -43,6 +47,7 @@ type Event struct {
 	Diagnosis     map[string]string        `json:"diagnosis,omitempty"`
 	Usage         *core.Usage              `json:"usage,omitempty"`
 	LatencyMS     int64                    `json:"latency_ms,omitempty"`
+	JudgeMS       int64                    `json:"judge_ms,omitempty"`
 	Error         string                   `json:"error,omitempty"`
 	Status        string                   `json:"status,omitempty"`
 	ExitCode      int                      `json:"exit_code,omitempty"`
@@ -57,11 +62,15 @@ type Event struct {
 }
 
 // CallTrace records one LLM call of one sample; it is serialized to
-// runs/<run_id>/calls/<seq>-<sample_id>.json.
+// runs/<run_id>/calls/<seq>-<sample_id>.json. Stage names the calling
+// pipeline phase when it is not the default executor answer ("judge"
+// for the llm_judge metric; optimizer-side calls reuse SampleID for
+// their stage).
 type CallTrace struct {
 	Seq       int                   `json:"seq"`
 	SampleID  string                `json:"sample_id"`
 	Role      core.Role             `json:"role"`
+	Stage     string                `json:"stage,omitempty"`
 	Request   provider.ChatRequest  `json:"request"`
 	Response  provider.ChatResponse `json:"response"`
 	LatencyMS int64                 `json:"latency_ms"`
@@ -89,6 +98,10 @@ type Engine struct {
 }
 
 // sampleOutcome is the per-sample result aggregated into RunResult.
+// usage carries the sample's total evaluation spend (executor plus
+// judge when llm_judge is declared); latency is the executor call and
+// judgeMS the judge call's latency, kept separate so dashboards keep
+// their executor-only DurationMS semantics.
 type sampleOutcome struct {
 	undispatched bool
 	failed       bool
@@ -96,6 +109,7 @@ type sampleOutcome struct {
 	diagnosis    map[string]string
 	usage        core.Usage
 	latency      time.Duration
+	judgeMS      int64
 	err          string
 }
 
@@ -214,7 +228,9 @@ func (e *Engine) Run(ctx context.Context, cand core.Candidate, samples []core.Sa
 	return res, nil
 }
 
-// evaluate renders, calls, scores and traces one sample.
+// evaluate renders, calls, scores and traces one sample. Metrics named
+// llm_judge are graded by a second provider call whose usage and
+// latency fold into the sample's total evidence (see Engine.judge).
 func (e *Engine) evaluate(ctx context.Context, role core.Role, cand core.Candidate, s core.Sample, callSeq *atomic.Int64, notifyStop func()) sampleOutcome {
 	prompt := core.RenderPrompt(cand.Prompt, s.Input)
 	e.emit(Event{Type: EventSampleStart, Time: time.Now(), RunID: e.RunID, SampleID: s.ID})
@@ -254,7 +270,29 @@ func (e *Engine) evaluate(ctx context.Context, role core.Role, cand core.Candida
 			oc.scores = make(map[string]float64, len(e.Metrics))
 			oc.diagnosis = make(map[string]string)
 			for _, m := range e.Metrics {
-				mr := Evaluate(m, resp.Content, s.Expected)
+				if m != MetricLLMJudge {
+					mr := Evaluate(m, resp.Content, s.Expected)
+					oc.scores[m] = mr.Score
+					if mr.Diagnosis != "" {
+						oc.diagnosis[m] = mr.Diagnosis
+					}
+					continue
+				}
+				mr, judgeUsage, judgeLatency, jerr := e.judge(ctx, s, resp.Content, callSeq)
+				oc.usage.PromptTokens += judgeUsage.PromptTokens
+				oc.usage.CompletionTokens += judgeUsage.CompletionTokens
+				oc.judgeMS = judgeLatency.Milliseconds()
+				if e.Budget.SoftStopped() {
+					notifyStop()
+				}
+				if jerr != nil {
+					// The judge being unavailable means incomplete
+					// evidence: fail the sample loudly instead of
+					// scoring it silently.
+					oc.failed = true
+					oc.err = "llm_judge: " + jerr.Error()
+					continue
+				}
 				oc.scores[m] = mr.Score
 				if mr.Diagnosis != "" {
 					oc.diagnosis[m] = mr.Diagnosis
@@ -291,6 +329,7 @@ func (e *Engine) evaluate(ctx context.Context, role core.Role, cand core.Candida
 		Error:      oc.err,
 		Usage:      oc.usage,
 		DurationMS: latency.Milliseconds(),
+		JudgeMS:    oc.judgeMS,
 	}
 	// The seq prefix keeps sample traces collision-free: distinct ids
 	// may sanitize to the same filename ("train/001" vs "train:001")
@@ -303,7 +342,7 @@ func (e *Engine) evaluate(ctx context.Context, role core.Role, cand core.Candida
 
 	ev := Event{
 		Type: EventSampleDone, Time: time.Now(), RunID: e.RunID, SampleID: s.ID,
-		Prompt: prompt, LatencyMS: latency.Milliseconds(),
+		Prompt: prompt, LatencyMS: latency.Milliseconds(), JudgeMS: oc.judgeMS,
 	}
 	if oc.failed {
 		ev.Error = oc.err

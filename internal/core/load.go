@@ -19,8 +19,10 @@ const InputPlaceholder = "{input}"
 // field errors are wrapped so errors.Is can match.
 var ErrValidation = errors.New("invalid document")
 
-// ValidMetrics lists the supported evaluation metrics.
-var ValidMetrics = []string{"exact_match", "json_validator", "f1"}
+// ValidMetrics lists the supported evaluation metrics. llm_judge is the
+// provider-backed LLM-as-judge score; the deterministic rest run
+// offline.
+var ValidMetrics = []string{"exact_match", "json_validator", "f1", "llm_judge"}
 
 // ValidSplits lists the supported dataset splits.
 var ValidSplits = []string{"train", "dev", "test"}

@@ -26,6 +26,10 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # go run 形式无 $GOPATH/bin PATH 假设；版本钉死保证告警集稳定。
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
+
       - name: Modernize (go-modern-guidelines)
         run: |
           output=$(go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -test ./... 2>&1 | grep -v '^go: downloading' || true)

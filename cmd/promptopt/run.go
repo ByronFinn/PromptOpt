@@ -402,7 +402,7 @@ func routeFeatures(task core.Task, kept []core.Sample, budgetEvals int64) optimi
 
 // verifiablePrimaries are the per-sample auto-judged metrics — the
 // prerequisite for scoring demo-augmented candidates on a minibatch.
-var verifiablePrimaries = []string{"exact_match", "f1", "json_validator"}
+var verifiablePrimaries = []string{"exact_match", "f1", "json_validator", "llm_judge"}
 
 // runOptimization drives the resolved optimizer over the retained
 // sample set: it recomputes the kept samples (the checkpoint pause may

@@ -1,0 +1,30 @@
+# goreleaser 配置（v2）：darwin/linux × amd64/arm64 单二进制。
+# 本地校验：goreleaser check（无 git 仓库时需先 git init + git remote add）。
+# 钉版说明见 .github/workflows/release.yml 与 docs/release.md。
+version: 2
+
+project_name: promptopt
+
+builds:
+  - id: promptopt
+    main: ./cmd/promptopt
+    binary: promptopt
+    env:
+      - CGO_ENABLED=0 # 纯 Go 单二进制，无 cgo 依赖
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+
+archives:
+  - id: promptopt
+    formats: [tar.gz] # 全平台统一 tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+# CHANGELOG.md 人工维护为权威（Keep a Changelog 格式），Release 正文引用它，
+# 不用 goreleaser 自动生成的 git log。
+changelog:
+  disable: true

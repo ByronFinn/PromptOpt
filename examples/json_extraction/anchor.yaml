@@ -1,0 +1,58 @@
+# V6 --anchor 锚点验证集示例：3 条人工编写的真实形态样本（全部 split: test）。
+# 用法（对 runs/ 下的零配置 run 做最终验证）：
+#   promptopt verify <run_id> --runs-dir runs \
+#     --anchor examples/json_extraction/anchor.yaml
+# 定位：本地真实数据示例，不是 GA PR 门禁输入——零配置 run 的任务契约由 LLM
+# 现场决定，静态锚点与之脱钩（语义边界见 docs/release.md 第 3 节）。
+# 字段约束对齐 core.LoadDataset 硬校验：数据集 name 必填；样本 id 唯一、
+# input 非空、expected 为字符串/数组/对象、split ∈ {train, dev, test}。
+name: tcm_ner_anchor
+
+samples:
+  - id: anchor-001
+    input: |
+      患者男性，56岁。胸胁刺痛，痛处固定不移，入夜更甚，舌质紫暗有瘀斑，脉涩。
+      四诊合参，证属气滞血瘀，治以活血化瘀、理气止痛，方用血府逐瘀汤加减，
+      药用桃仁、红花、当归、川芎、赤芍、牛膝。
+    expected:
+      entities:
+        - {type: 证候, text: 气滞血瘀}
+        - {type: 治法, text: 活血化瘀}
+        - {type: 治法, text: 理气止痛}
+        - {type: 方剂, text: 血府逐瘀汤}
+        - {type: 中药, text: 桃仁}
+        - {type: 中药, text: 红花}
+        - {type: 中药, text: 当归}
+        - {type: 中药, text: 川芎}
+        - {type: 中药, text: 赤芍}
+        - {type: 中药, text: 牛膝}
+    split: test
+
+  - id: anchor-002
+    input: |
+      患者女性，60岁。眩晕耳鸣，头目胀痛，每因烦劳或恼怒而加重，面时潮红，
+      急躁易怒，少寐多梦，舌红苔黄，脉弦数。证属肝阳上亢，治以平肝潜阳、
+      清热息风，方选天麻钩藤饮，药用天麻、钩藤、石决明、栀子、黄芩。
+    expected:
+      entities:
+        - {type: 证候, text: 肝阳上亢}
+        - {type: 治法, text: 平肝潜阳}
+        - {type: 治法, text: 清热息风}
+        - {type: 方剂, text: 天麻钩藤饮}
+        - {type: 中药, text: 天麻}
+        - {type: 中药, text: 钩藤}
+        - {type: 中药, text: 石决明}
+        - {type: 中药, text: 栀子}
+        - {type: 中药, text: 黄芩}
+    split: test
+
+  - id: anchor-003
+    input: |
+      患者男性，41岁。脘腹痞闷，肢体困重，口苦口黏，恶心欲呕，大便溏而不爽，
+      舌红苔黄腻，脉濡数。证属湿热蕴脾，治以清热化湿为主，嘱清淡饮食，
+      暂不处方，随诊再定。
+    expected:
+      entities:
+        - {type: 证候, text: 湿热蕴脾}
+        - {type: 治法, text: 清热化湿}
+    split: test

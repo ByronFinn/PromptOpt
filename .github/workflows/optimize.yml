@@ -1,0 +1,127 @@
+# PR 优化对比集成模板（V6 GA 门禁）。
+#
+# 在 PR 上自动跑一次零配置优化，再用 `promptopt verify` 以同 spec 合成保留集
+# 做回归门禁：新提示词不得在关键指标/约束上退化（退出码 3 = PR 检查失败）。
+# 不带 --anchor：零配置 run 的任务契约（prompt_template/metrics/输出 schema）由
+# LLM 现场决定（internal/harness/synthesize.go 的 spec 合成提示词），静态锚点
+# 与之脱钩；同 spec 合成保留集才是同契约对照（带 caveat）。语义边界与完整
+# runbook 见 docs/release.md。
+#
+# 需要配置三个仓库 secrets（缺任一则整个 job 跳过，不失败、不烧 API 费）：
+#   PROMPTOPT_BASE_URL  OpenAI 兼容 API base URL（如 https://api.openai.com/v1）
+#   PROMPTOPT_MODEL     模型名
+#   PROMPTOPT_API_KEY   API key
+name: Optimize
+
+on:
+  pull_request:
+    paths:
+      - "examples/**"
+      - ".github/workflows/optimize.yml"
+  workflow_dispatch:
+
+# 成本护栏：同一 PR 只保留最新一次优化运行，旧运行自动取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 零配置优化的任务描述。接入自己的仓库时替换为你的任务提示词，
+  # 并按需调整 paths 过滤（当前只盯示例任务）。
+  TASK_PROMPT: "从中医病历文本中抽取证候、治法、方剂、中药命名实体，输出结构化 JSON"
+
+jobs:
+  optimize:
+    name: Prompt optimization comparison
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # secrets 不能直接用于 if 条件：先落到 job env，再由 Guard 步骤间接判断。
+    env:
+      PROMPTOPT_BASE_URL: ${{ secrets.PROMPTOPT_BASE_URL }}
+      PROMPTOPT_MODEL: ${{ secrets.PROMPTOPT_MODEL }}
+      PROMPTOPT_API_KEY: ${{ secrets.PROMPTOPT_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Guard secrets
+        id: cfg
+        run: |
+          if [ -z "$PROMPTOPT_BASE_URL" ] || [ -z "$PROMPTOPT_MODEL" ] || [ -z "$PROMPTOPT_API_KEY" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::未配置 PROMPTOPT_BASE_URL / PROMPTOPT_MODEL / PROMPTOPT_API_KEY secrets，跳过优化对比（约定见 docs/release.md）"
+          fi
+
+      - name: Build
+        if: steps.cfg.outputs.skip != 'true'
+        run: go build -o promptopt ./cmd/promptopt
+
+      - name: Optimize
+        if: steps.cfg.outputs.skip != 'true'
+        run: |
+          set +e
+          # 预算为起点值，按模型定价调整：须覆盖 baseline 评估 + 至少一轮优化，
+          # 否则预算饿死 baseline 的 run 不产 frontier.json，verify 会以明确
+          # 错误退出 1（见下方注释与 docs/release.md 的预算建议）。
+          ./promptopt run "$TASK_PROMPT" --headless --out runs-pr \
+            --budget-tokens 600000 --budget-opt-tokens 200000 > run-summary.json
+          code=$?
+          set -e
+          # 退出码矩阵：0 = 正常完成；2 = 预算耗尽（--headless 下 JSON 摘要仍会
+          # 打印到 stdout，run_id 可取）——两者都继续 verify；其余（1 = 评估/
+          # 用法失败等）无有效摘要，立即失败。
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
+            cat run-summary.json 2>/dev/null || true
+            exit "$code"
+          fi
+          RUN_ID=$(jq -r .run_id run-summary.json)
+          echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          cat run-summary.json
+
+      - name: Verify
+        if: steps.cfg.outputs.skip != 'true'
+        run: |
+          set +e
+          # 连接参数不传 flag：verify 按 flag > env（PROMPTOPT_*）> run manifest
+          # 回退，上面的 job 级 env 自动生效。
+          # 退出码 3 = 回归/约束违反 → PR 检查失败；
+          # 退出码 2 = verify 侧预算内跑不完（证据不完整，回归结论不可得）→ 亦失败，可加预算重跑。
+          ./promptopt verify "$RUN_ID" --runs-dir runs-pr --max-regression 0.05 --headless > verify-report.json
+          code=$?
+          set -e
+          # 指标对照表写入 step summary（无论成败，PR 上直接可看）。
+          jq -r '. as $r
+            | (($r.baseline.metric_means // {}) + ($r.delivered.metric_means // {}) | keys | sort) as $ms
+            | "## PR 优化对比（run `\($r.run_id)`）\n\n"
+              + (if $r.caveat then "> ⚠️ 验证集为同 spec 合成保留集：结论未经真实数据验证（见 docs/release.md）\n\n" else "" end)
+              + "- 验证模式：\($r.mode)　主指标：\($r.primary)　退出码：\($r.exit_code)（3=回归/约束违反，2=证据不完整）\n\n"
+              + "| 指标 | baseline（\($r.baseline.candidate_id)） | delivered（\($r.delivered.candidate_id)） | Δ |\n"
+              + "|---|---|---|---|\n"
+              + ([$ms[] as $m
+                  | ($r.baseline.metric_means[$m]) as $b
+                  | ($r.delivered.metric_means[$m]) as $d
+                  | "| \($m)\(if $m == $r.primary then "（主）" else "" end)"
+                    + "| \(if $b == null then "—" else ($b * 10000 | round / 10000) end)"
+                    + "| \(if $d == null then "—" else ($d * 10000 | round / 10000) end)"
+                    + "| \(if ($b == null or $d == null) then "—" else (($d - $b) * 10000 | round / 10000) end) |"]
+                | join("\n"))' verify-report.json >> "$GITHUB_STEP_SUMMARY" || true
+          cat verify-report.json 2>/dev/null || true
+          exit "$code"
+
+      - name: Upload artifacts
+        if: always() && steps.cfg.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: runs-pr
+          path: |
+            runs-pr
+            run-summary.json
+            verify-report.json
