@@ -1,6 +1,6 @@
 # PromptOpt 开发指南
 
-> ⚠️ **v2 转向中（2026-09-28）**：项目已立项 v2 —— GEPA 反射进化 + 多范式提示词优化平台，**Go 同仓库原地重写**。本文件下述 Python/uv 工作流仅适用于归档的 v1 代码（tag `v0.1-python`），V0 落地时将按 Go 工作流重写本文件。新路线见 [ROADMAP.md](ROADMAP.md) 与 [PRD-0000](docs/prd/PRD-0000-promptopt-v2-gepa-go-rewrite.md)（父 Issue #49）。Go 实现须遵守 [JetBrains go-modern-guidelines](https://github.com/JetBrains/go-modern-guidelines)。
+> **v2（Go 重写）已落地 V0–V6**：GEPA 反射进化 + 多范式提示词优化平台，Go 同仓库原地重写。v1 Python 代码归档于 tag `v0.1-python`。新路线见 [ROADMAP.md](ROADMAP.md) 与 [PRD-0000](docs/prd/PRD-0000-promptopt-v2-gepa-go-rewrite.md)（父 Issue #49）。Go 实现须遵守 [JetBrains go-modern-guidelines](https://github.com/JetBrains/go-modern-guidelines)。
 
 ## 基本原则
 
@@ -27,23 +27,24 @@ go test ./...
 go install ./cmd/promptopt
 ```
 
-CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）执行 `go vet ./...`、`go test -race ./...`、`go build ./...`，全绿才可合入。
+CI（[.github/workflows/ci.yml](.github/workflows/ci.yml)）执行 `go vet ./...`、staticcheck（钉版 2026.2.1）、modernize、`go test -race ./...`、`go build ./...` 五道门禁，全绿才可合入；门禁语义与 PR 优化对比模板见 [docs/release.md](docs/release.md)。
 
 ## 核心架构
 
 ```text
 PromptOpt/
-├── cmd/promptopt/        # CLI 入口：run / serve / version（标准库 flag）
+├── cmd/promptopt/        # CLI 入口：run / serve / verify / rollback / replay / version（标准库 flag）
 ├── internal/
 │   ├── config/           # flag 默认值与 PROMPTOPT_* 环境变量解析
 │   ├── core/             # Task / Candidate / Dataset / RunResult 模型与 YAML 加载、split 过滤
-│   ├── engine/           # GEPA 优化引擎：反思 / 突变 / Pareto 前沿 / lineage / VistaGuard（Optimizer 接口落位于此）
-│   ├── eval/             # 并行评估引擎：worker 池、指标、Budget 阀门、事件流
+│   ├── engine/           # 优化引擎共享骨架：Loop 脚手架 / Advisor 调用管道 / Reflector / 突变 / Pareto 前沿 / VistaGuard / lineage（Optimizer 接口落位于此）
+│   ├── optimizers/       # 多范式注册表 + 范式路由器 + builtin 清单；子包 protegi / miprov2 / evoprompt（插件开发见 docs/plugins.md）
+│   ├── eval/             # 并行评估引擎：worker 池、指标（含 llm_judge）、Budget 阀门、事件流
 │   ├── harness/          # 零配置合成管线：任务规格/样本合成、p¹ 方差过滤、检查点门
-│   ├── provider/         # Provider 接口 + OpenAI 兼容实现（重试 / usage 统计）
-│   └── web/              # net/http 看板：run 列表 / 详情、SSE 实时事件流（go:embed 模板）
-├── docs/                 # PRD / ADR / research / agents 约定
-└── examples/             # 示例任务（json_extraction）
+│   ├── provider/         # Provider 接口 + OpenAI 兼容实现 + Anthropic 原生实现（重试 / usage 统计）
+│   └── web/              # net/http 看板：run 列表 / 详情、前沿看板、trace/diff/compare、SSE 实时事件流（go:embed 模板）
+├── docs/                 # PRD / ADR / research / agents 约定 / 插件与发布指南
+└── examples/             # 示例任务（json_extraction / sentiment_classification / text_summarization，见 examples/README.md）
 ```
 
 ### 关键模型
@@ -55,18 +56,19 @@ PromptOpt/
 
 ### 评估指标
 
-支持 `exact_match`、`f1`、`json_validator`，在 Task 的 `metrics` 中声明；`primary_metric` 指定主指标，缺省取第一个声明值。
+支持 `exact_match`、`f1`、`json_validator`（确定性）与 `llm_judge`（经 Provider 按内置中文 rubric 打分 0~1 + 中文诊断；声明该指标的任务每次评估追加一次裁判调用，计入 executor 预算、参与软停），在 Task 的 `metrics` 中声明；`primary_metric` 指定主指标，缺省取第一个声明值。
 
 ## 开发约定
 
 - **遵守 [JetBrains go-modern-guidelines](https://github.com/JetBrains/go-modern-guidelines)**：按 go.mod 版本用现代习语（错误处理、接口设计、并发、slice/map 用法等）
 - **输出约定**: 人类可读输出走 stderr；`--headless` 时 stdout 仅输出 JSON 运行摘要（见 [cmd/promptopt/run.go](cmd/promptopt/run.go)）
-- **退出码契约**: `0` 成功；`1` 评估失败或用法错误；`2` 预算耗尽（优先于 `1`）
-- **命令面**: `run --web` 提供实时 SSE 看板，run 结束后看板驻留（可在前沿看板采纳候选）直至 Ctrl-C；`serve` 浏览历史 run 并提供产物干预端点（`POST /runs/{id}/adopt` 写 adopted.json），仍不暴露实时端点
+- **退出码契约**: `0` 成功；`1` 评估失败或用法错误；`2` 预算耗尽（优先于 `1`）；`3` verify 回归或约束违反（优先级 `2 > 1 > 3`，见 [cmd/promptopt/main.go](cmd/promptopt/main.go)）
+- **命令面**: `run --web` 提供实时 SSE 看板，run 结束后看板驻留（可在前沿看板采纳候选）直至 Ctrl-C；`serve` 浏览历史 run 并提供产物干预端点（`POST /runs/{id}/adopt` 写 adopted.json），仍不暴露实时端点；`verify <run_id>` 对交付候选做锚点/合成保留集回归门禁（退出码 3=回归或约束违反）；`rollback <run_id>` 回退采纳（历史追加 adopted-history.jsonl，`--emit` 导出 candidate.yaml）；`replay <run_id>` 输出完整调用与决策审计时间线（`--headless` 为 JSONL）
+- **多范式**: `--optimizer`（零配置模式专用，默认 gepa，可选 auto 或注册名——以 `--optimizer bogus` 报错清单为准）+ `--evo-variant ga|de`；范式接入步骤见 [docs/plugins.md](docs/plugins.md)。已知接线缺口：protegi 注册行待补（`--optimizer protegi` 暂不可达）；`--provider anthropic` 在 CLI 层为拒绝桩（`internal/provider/anthropic.go` 已落地，接线待合入）
 
 ## 示例项目
 
-参考 [examples/json_extraction/](examples/json_extraction/) 了解最小工作流：
+三个示例覆盖全部指标与两种 `--optimizer` 用法，索引见 [examples/README.md](examples/README.md)（json_extraction 双指标多约束 / sentiment_classification 显式 gepa / text_summarization auto 路由）。最小工作流：
 
 ```bash
 cd examples/json_extraction

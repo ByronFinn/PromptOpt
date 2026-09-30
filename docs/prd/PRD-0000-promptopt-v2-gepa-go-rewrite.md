@@ -47,30 +47,34 @@
 * **多范式可插拔（接口先行，实现分期）**：`Optimizer` 接口统一约束；v1 仅 GEPA 实现；ProTeGi / MIPROv2 风格 / TextGrad 风格 / EvoPrompt 风格为后续里程碑。
 * **预算阀门**（2026-09-28 grill 细化）：token 用量与评估次数双模式，可组合。token 分角色计量（executor / 优化侧分开统计，报告可解释成本去向），任一口径或合计超限即触发终止；评估次数仅计 executor 调用（对齐 GEPA `max_metric_calls` 语义）；触发后**软停**——当前 minibatch 跑完、完成结算再优雅退出，输出当前最优 + 解释性报告；token 计量来自 provider usage 回传。
 * **Web 仪表盘**：Go 单二进制 `go:embed` 前端，localhost 启动；htmx + 模板 + SSE 实时事件流；**V1 即交付看板骨架页**（运行状态 + 事件流，开源门面），V2 补合成集审核页，V4 完整视图（Pareto 前沿、预算消耗、trace 浏览、候选 diff、检查点干预）；CLI `--headless` 无头模式输出 JSON 供自动化。
+  * **决议修订（2026-09-30，前端栈）**：实际交付为混合形态——SSE 实时事件流用原生 JS `EventSource`（htmx 无 SSE 语义），合成集审核页与前沿看板的交互局部刷新用 htmx（`go:embed` 内嵌 htmx.min.js）。与"htmx + 模板 + SSE"决议功能等价：无 SPA、无前端构建链、单二进制不变。原 htmx 决议按此修订记载。
 * **开源工程**：面向开源传播——V0 完成 README 重写（定位/badge/快速开始/架构图）+ CONTRIBUTING.md + LICENSE（MIT）确认；V1 起每个里程碑录制 demo GIF 进 README；V6 用 goreleaser 出多平台单二进制 Release + changelog。
 * **干预与全托管**：检查点默认自动放行（全托管），`--interactive` 或仪表盘中切换为人工确认。
 * **Provider**：接口抽象；v1 实现 OpenAI-compatible 通用适配（OpenAI/DeepSeek/Qwen/Ollama/vLLM）+ Anthropic 原生；带重试/限流/usage 统计。
 * **最终验证（verify）**：强引导用户提供 3~5 条真实样本作为**锚点验证集**（仅用于最终验证，永不进入优化循环，保持对合成分布的独立性）；拒绝提供时降级为合成保留集验证，报告必须标注"结论未经真实数据验证"（ADR 0001）。
 * **可复现 = 完整可重放**（2026-09-28 grill 决议）：每次 run 落盘完整决策上下文——模型版本、seed、参数、合成集快照、每次 LLM 调用的请求/响应 trace；`promptopt replay <run_id>` 可审计每一步为何发生。不承诺 bit 级一致，报告注明差异来源分类（采样随机性/模型版本/合成集再生成）。
 * **持久化**：SQLite（run/candidate/lineage/样本级结果）+ artifact 文件（YAML/JSON，可直接人工编辑干预）。
+  * **决议修订（2026-09-30，持久化）**：SQLite 未引入——artifact 文件（`runs/<id>/`、`synth/<id>/` 下的 manifest / events.jsonl / samples / lineage / frontier / adopted 等）承担全部持久化与人工干预职责。按"难逆转条件不满足"记 PRD 级决议修订而非 ADR：当前查询负载（单用户、看板按目录扫描）无结构化存储的硬需求，引入 SQLite 的时机留给出现真实查询瓶颈或跨 run 分析需求时再议。
 * **工程规范**：遵守 go-modern-guidelines；CI 跑 `go vet` / `staticcheck` / `modernize` / 全量测试；同仓库原地重写，Python 代码删除并打 tag `v0.1-python` 留档。
 * **遗留处置**：45 个旧 issue 批量关闭（评论指向本 PRD 与父 Issue），能力在新 roadmap 中重新拆解为新 issue。
 
 ## Acceptance Criteria
 
-* [ ] `promptopt run "<一个自然语言提示词>"` 在零配置下完成合成评测→优化→输出最优提示词，全程预算受控
-* [ ] 合成评测集经过方差过滤；用户可在检查点审核/增删/替换样本（Web + artifact 文件两条路径）
-* [ ] 优化循环产生反思 trace、候选 lineage、Pareto 前沿记录，全部可追溯查询
-* [ ] 坏种子场景有防护：重启与 ε-greedy 生效时留有事件记录（VISTA 机制）
-* [ ] 预算耗尽时优雅终止：退出码规范、输出当前最优候选与已消耗预算报告
-* [ ] Web 仪表盘实时展示前沿/预算/trace，检查点可人工干预；`--headless` 输出 JSON
-* [ ] `go vet` / `staticcheck` / `modernize` / `go test ./...` 全绿；构建产物为单二进制
-* [ ] Python 源码从工作区移除，`v0.1-python` tag 存在
-* [ ] 旧 issue 全部关闭且评论含指向说明；新 roadmap 里程碑拆解为 GitHub issue/里程碑
-* [ ] V1 结束时浏览器可打开看板骨架页（实时事件流可见）
-* [ ] 仓库具备开源门面：badge / 快速开始 / 贡献指南 / demo GIF 齐备
-* [ ] V3 算法行为测试全绿：前沿单调性（新入前沿候选不被刚移出者支配）、预算分角色扣减、VistaGuard 触发条件；固定 mock-LLM 端到端黄金用例可重放
-* [ ] `promptopt replay <run_id>` 能完整审计一次 run 的每次 LLM 调用与决策
+（2026-09-30 勾选，V0–V6 交付后逐条核对；未满足项旁标注处置）
+
+* [x] `promptopt run "<一个自然语言提示词>"` 在零配置下完成合成评测→优化→输出最优提示词，全程预算受控
+* [x] 合成评测集经过方差过滤；用户可在检查点审核/增删/替换样本（Web + artifact 文件两条路径）
+* [x] 优化循环产生反思 trace、候选 lineage、Pareto 前沿记录，全部可追溯查询
+* [x] 坏种子场景有防护：重启与 ε-greedy 生效时留有事件记录（VISTA 机制）
+* [x] 预算耗尽时优雅终止：退出码规范、输出当前最优候选与已消耗预算报告
+* [x] Web 仪表盘实时展示前沿/预算/trace，检查点可人工干预；`--headless` 输出 JSON
+* [x] `go vet` / `staticcheck` / `modernize` / `go test ./...` 全绿；构建产物为单二进制——staticcheck/modernize 于 V6 接入 CI 五道门禁；tcmsp-30（go1.26.5 linux/amd64）实测全绿（2026-09-30）
+* [x] Python 源码从工作区移除，`v0.1-python` tag 存在
+* [x] 旧 issue 全部关闭且评论含指向说明；新 roadmap 里程碑拆解为 GitHub issue/里程碑——`gh issue list --state open` 实测仅剩 #49（父 Issue）与 #55/#56（V5/V6 里程碑 issue），旧 #2–#46 均已关闭
+* [x] V1 结束时浏览器可打开看板骨架页（实时事件流可见）
+* [ ] 仓库具备开源门面：badge / 快速开始 / 贡献指南 / demo GIF 齐备——**未满足项：demo GIF 环境受限待录**（README 已留占位注释，其余 badge/快速开始/贡献指南/LICENSE 均齐备）
+* [x] V3 算法行为测试全绿：前沿单调性（新入前沿候选不被刚移出者支配）、预算分角色扣减、VistaGuard 触发条件；固定 mock-LLM 端到端黄金用例可重放
+* [x] `promptopt replay <run_id>` 能完整审计一次 run 的每次 LLM 调用与决策——V6 落地（合并 events.jsonl 与合成/评估/优化/裁判调用留痕的审计时间线）
 
 ## Definition of Done
 

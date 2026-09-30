@@ -16,12 +16,12 @@ PromptOpt 把提示词调优从"手工试错"变成预算受控、可干预、�
 ② 优化引擎           GEPA 反射进化 + Pareto 前沿，预算阀门控制
 ③ 输出               最优提示词 + lineage + 解释性报告
 
-全程：localhost 仪表盘实时可看（htmx + SSE）· 检查点可干预 · --headless 全托管
+全程：localhost 仪表盘实时可看（htmx 局部刷新 + 原生 SSE）· 检查点可干预 · --headless 全托管
 ```
 
 - **预算受控**：token 用量 ∥ 评估次数双上限，耗尽优雅终止并输出当前最优
 - **可干预**：Web 仪表盘实时查看运行状态与事件流，检查点处可审核合成评测集、采纳候选
-- **可托管**：`--headless` 无头模式 + JSON 输出 + 规范退出码（`0` 成功 / `1` 评估失败 / `2` 预算耗尽）
+- **可托管**：`--headless` 无头模式 + JSON 输出 + 规范退出码（`0` 成功 / `1` 评估失败 / `2` 预算耗尽 / `3` verify 回归或约束违反）
 
 完整路线与理论基础见 [ROADMAP.md](ROADMAP.md)，设计决策见 [PRD-0000](docs/prd/PRD-0000-promptopt-v2-gepa-go-rewrite.md) 与 [ADR](docs/adr/)。
 
@@ -93,6 +93,32 @@ runs/<run_id>/
 └── opt-calls/NNN-<阶段>.json  # 优化侧调用留痕（反思 / 突变 / 修复），含完整请求响应与用量
 ```
 
+### 多范式优化（--optimizer）
+
+优化引擎不止 GEPA 一家：`--optimizer` 在零配置模式下选择优化范式（手工三件套模式只做单轮评估，显式传该 flag 是用法错误）。范式以"插件"形态接入——一个范式 = 一个实现 `engine.Optimizer` 的子包 + `internal/optimizers/builtin` 里一行注册，接入指南见 [docs/plugins.md](docs/plugins.md)：
+
+```bash
+# 显式指定范式
+promptopt run "从中医病历文本中抽取症状、证型与方剂，输出 JSON" --optimizer miprov2
+promptopt run "把电商评论归类为正面/中性/负面" --optimizer evoprompt --evo-variant de
+
+# auto：按任务特征自动路由（决策与原因落 manifest）
+promptopt run "把这条资讯压缩成一句话摘要" --optimizer auto
+```
+
+已注册范式（以 `--optimizer bogus` 的报错清单为准）：
+
+| 范式 | 机制 | 适用 |
+|---|---|---|
+| `gepa`（默认） | minibatch 反思 + 逐样本 Pareto 前沿 + VISTA 防护 | 多指标权衡、生产多维约束 |
+| `miprov2` | 指令变体 + train 样本 few-shot 子集联合搜索（去泄漏 minibatch 打分） | 指令 + Few-shot 复合任务 |
+| `evoprompt` | LLM 充当进化算子：锦标赛交叉 / 变异 / 差分变异（`--evo-variant ga\|de`） | 群体搜索、探索型任务 |
+| `auto` | 范式路由器：五级规则（流水线 → 预算紧张 → few-shot 复合 → 多指标 → 默认）+ 降级链 | 不知道选哪个时 |
+
+路由决策（`optimizer` / `optimizer_requested` / `optimizer_route_reason`）与范式专属事件（文本梯度、种群演化等）全量落 manifest 与事件流，compare 页有"范式"行可直接对比不同范式在同一任务上的结果（示例见 [examples/README.md](examples/README.md)）。
+
+已知边界：`protegi`（ProTeGi 文本梯度）的实现已合入（`internal/optimizers/protegi`）但 builtin 注册行待补——`--optimizer protegi` 暂不可达，auto 默认路由会回退 `gepa` 并在 manifest 记录原因。
+
 ### 运行评估（配置模式）
 
 已有任务 YAML 时，用显式的 task / candidate / dataset 三件套只做评估（不合成、不优化）。以 [examples/json_extraction](examples/json_extraction/)（中医医疗 NER 抽取）为例：
@@ -123,7 +149,7 @@ runs/<run_id>/
 
 ### Web 仪表盘
 
-`run --web` 随运行启动实时看板（htmx + SSE，内嵌单二进制，无前端构建链），run 结束后看板驻留——可在前沿看板采纳候选，直至 Ctrl-C；`--addr` 自定义监听地址（默认 `127.0.0.1:17700`，仅与 `--web` 搭配生效）：
+`run --web` 随运行启动实时看板（htmx 局部刷新 + 原生 SSE，内嵌单二进制，无前端构建链），run 结束后看板驻留——可在前沿看板采纳候选，直至 Ctrl-C；`--addr` 自定义监听地址（默认 `127.0.0.1:17700`，仅与 `--web` 搭配生效）：
 
 ```bash
 promptopt run "从中医病历文本中抽取症状、证型与方剂，输出 JSON" --web
@@ -150,30 +176,64 @@ promptopt run "从中医病历文本中抽取症状、证型与方剂，输出 J
 promptopt serve    # http://127.0.0.1:17700
 ```
 
+## 验证、回退与审计
+
+优化交付的提示词不是终点——V6 补齐了"防退化"的工程闭环：
+
+### verify：锚点验证与回归门禁
+
+`promptopt verify <run_id>` 对已交付候选 vs baseline 在验证集上复评：**优先用锚点验证集**（`--anchor` 传 3~5 条真实样本的 dataset YAML，仅用于最终验证、永不进入优化循环，ADR 0001）；未提供锚点时按原 run spec 独立重合成同契约保留集对照，报告强制标注"结论未经真实数据验证"（示例锚点见 [examples/json_extraction/anchor.yaml](examples/json_extraction/anchor.yaml)）：
+
+```bash
+promptopt verify 20260930-120001-xxxx --anchor my-anchor.yaml \
+  --max-regression 0.05 --max-avg-tokens 4000 --max-avg-latency-ms 20000
+```
+
+- **回归判定**：主指标均值退化超过 `--max-regression`（默认 0.05）即回归
+- **约束硬检查**：`json_validator` 任务交付侧 JSON 合法率须 100%；`--max-avg-tokens` / `--max-avg-latency-ms` 成本与延迟上限（口径含 llm_judge 裁判开销）
+- **退出码**：`0` 通过；`1` 用法或评估失败；`2` 证据不完整（预算内跑不完，优先）；`3` 回归或约束违反
+- 报告落 `runs/<id>/verify/<时间戳>/`（verify.json + markdown），连接参数按 flag > `PROMPTOPT_*` 环境变量 > run manifest 回退
+
+### rollback：一键回退采纳
+
+`promptopt rollback <run_id>` 回退 `adopted.json` 采纳：缺省回退到上一不同采纳、兜底 baseline，`--to <候选>` 指定目标，旧采纳追加 `adopted-history.jsonl` 留痕，`--emit candidate.yaml` 把回退结果导出为可复用的候选文件。
+
+### replay：完整审计时间线
+
+`promptopt replay <run_id>` 按时间排序合并 events.jsonl 与各阶段 LLM 调用留痕（合成 / baseline / 优化单元 / 优化侧 / 裁判），输出完整调用与决策审计时间线及覆盖率摘要；`--full` 展开全文，`--headless` 输出 JSONL 供脚本消费。
+
+### CI 集成与 Release
+
+- [`.github/workflows/optimize.yml`](.github/workflows/optimize.yml)：PR 优化对比模板——PR 上自动跑零配置优化 → `verify` 同契约保留集门禁（退出码 3 = PR 检查失败），缺 secrets 自动跳过，指标对照表渲染进 PR 摘要页
+- [`.github/workflows/ci.yml`](.github/workflows/ci.yml)：五道门禁（vet / staticcheck / modernize / test -race / build）
+- [`.github/workflows/release.yml`](.github/workflows/release.yml) + [`.goreleaser.yaml`](.goreleaser.yaml)：推送 `v*` tag 触发 goreleaser，出 darwin/linux × amd64/arm64 纯 Go 单二进制 + checksums；changelog 人工维护于 [CHANGELOG.md](CHANGELOG.md)
+- 门禁语义、secrets 约定与发布流程详见 [docs/release.md](docs/release.md)
+
 ## 架构一览
 
 Go 单二进制，标准库优先：
 
 ```text
 PromptOpt/
-├── cmd/promptopt/        # CLI 入口：run / serve / version
+├── cmd/promptopt/        # CLI 入口：run / serve / verify / rollback / replay / version（标准库 flag）
 ├── internal/
 │   ├── core/             # Task / Candidate / Dataset / RunResult 核心模型与 YAML 加载
 │   ├── config/           # flag 默认值与 PROMPTOPT_* 环境变量解析
-│   ├── provider/         # OpenAI 兼容 Provider：重试、usage 统计
-│   ├── eval/             # 并行评估引擎：worker 池、exact_match / f1 / json_validator、预算阀门
+│   ├── provider/         # Provider 接口 + OpenAI 兼容实现 + Anthropic 原生实现（共享重试核心 / usage 统计）
+│   ├── eval/             # 并行评估引擎：worker 池、exact_match / f1 / json_validator / llm_judge、预算阀门
 │   ├── harness/          # 零配置合成管线：任务规格/样本合成、p¹ 方差过滤、检查点门
-│   ├── engine/           # GEPA 优化引擎：Reflector / Mutator / Pareto 前沿 / VistaGuard / lineage / 报告
+│   ├── engine/           # 优化引擎共享骨架：Loop 脚手架 / Reflector / Mutator / Pareto 前沿 / VistaGuard / lineage / 报告（Optimizer 接口落位于此）
+│   ├── optimizers/       # 多范式可插拔：注册表 + 范式路由器 + builtin 清单 + protegi / miprov2 / evoprompt 子包
 │   └── web/              # 内嵌 Web 看板：run 列表/详情、前沿看板、trace 浏览器、diff/对比、报告导出、SSE 实时事件流（go:embed 模板）
-├── docs/                 # PRD / ADR / research / reports
-└── examples/             # 示例任务
+├── docs/                 # PRD / ADR / research / reports / 插件与发布指南
+└── examples/             # 示例任务（3 个，见 examples/README.md）
 ```
 
-按 [ROADMAP.md](ROADMAP.md) 推进中的模块：`optimizers/`（多范式可插拔接口，V5）、`store/`（SQLite，纯 Go 驱动）。
+按 [ROADMAP.md](ROADMAP.md) 推进中的模块：`store/`（SQLite，纯 Go 驱动）——当前由 artifact 文件承担全部持久化（PRD-0000 决议修订，2026-09-30）。
 
 ## 当前状态
 
-v2 处于 V0 → V4 已落地阶段：Go 骨架、Provider、并行评估引擎、Web 看板、零配置 Harness Builder（合成 → p¹ 过滤 → 检查点 → baseline 评估，含合成集审核页）、GEPA 优化引擎（反思突变 + Pareto 前沿 + VistaGuard 防护 + lineage/报告）与完整化 Web 干预体验（前沿看板、预算仪表、trace 浏览器、候选 diff、run 对比、报告导出、候选采纳）均可用；下一步按 V5 里程碑扩展多范式优化器。
+v2 处于 V0 → V6 已落地阶段：Go 骨架、Provider（OpenAI 兼容 + Anthropic 原生）、并行评估引擎（含 llm_judge）、Web 看板、零配置 Harness Builder（合成 → p¹ 过滤 → 检查点 → baseline 评估）、GEPA 优化引擎与完整化 Web 干预体验之上，V5 落地多范式扩展（Optimizer 注册表 + 范式路由器 + ProTeGi / MIPROv2 / EvoPrompt 实现），V6 落地工程化闭环（verify 锚点验证与回归门禁、rollback / replay、退出码 3、CI 五道门禁 + PR 优化对比模板、goreleaser Release 规范）。待办：demo GIF 待录、protegi 注册行与 `--provider anthropic` CLI 接线待补（见上文已知边界）。
 
 ## v1（Python）归档
 

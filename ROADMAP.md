@@ -69,13 +69,13 @@ promptopt/                      # Go module（同仓库原地重写，单二进�
 
 **目标**：Go 项目骨架立起来，Python 体面归档。
 
-- [ ] Go module + `cmd/promptopt` + `internal/` 布局 + config 加载
-- [ ] `Provider` 接口 + OpenAI-compatible 通用实现 + Anthropic 原生实现（重试/限流/usage 统计）
-- [ ] SQLite（纯 Go 驱动）+ artifact 文件读写骨架
-- [ ] CI：vet / staticcheck / modernize / test 全绿
-- [ ] 删除 `src/` `tests/` `pyproject.toml` 等 Python 资产，打 tag `v0.1-python`
-- [ ] AGENTS.md 按 Go 工作流重写
-- [ ] 开源门面：README 重写（v2 定位、badge、快速开始、架构图）+ CONTRIBUTING.md + LICENSE（MIT）确认
+- [x] Go module + `cmd/promptopt` + `internal/` 布局 + config 加载
+- [x] `Provider` 接口 + OpenAI-compatible 通用实现 + Anthropic 原生实现（重试/限流/usage 统计）——Anthropic 原生实现落地于 V5（`internal/provider/anthropic.go` + 共享重试核心），CLI `--provider anthropic` 放行待接线（见 V5 已知边界）
+- [x] artifact 文件读写骨架——落地为纯 artifact 文件持久化（`runs/` + `synth/`），SQLite 未引入：PRD-0000 决议修订（2026-09-30），难逆转条件不满足
+- [x] CI：vet / staticcheck / modernize / test 全绿——staticcheck 于 V6 接入，五道门禁齐备（[ci.yml](.github/workflows/ci.yml)）
+- [x] 删除 `src/` `tests/` `pyproject.toml` 等 Python 资产，打 tag `v0.1-python`
+- [x] AGENTS.md 按 Go 工作流重写
+- [x] 开源门面：README 重写（v2 定位、badge、快速开始、架构图）+ CONTRIBUTING.md + LICENSE（MIT）确认——LICENSE 文件于 V6 落地
 
 **验收**：`go build ./...` 出单二进制；`go test ./...` 绿；Provider mock 测试覆盖重试与 usage 计量。
 
@@ -83,12 +83,12 @@ promptopt/                      # Go module（同仓库原地重写，单二进�
 
 **目标**：测得准、存得全（继承旧 M1 意图，Go 重实现）。
 
-- [ ] core 模型：Task / Candidate / Dataset / RunResult / Trace（structs + YAML/JSON artifact 序列化）
-- [ ] eval 引擎：goroutine+errgroup 并行评估、全量 trace 捕获、指标（exact_match / f1 / json_validator / LLM-judge）
-- [ ] 评估器返回 `(score, diagnosis)`——diagnosis 即 ASI，进反思上下文
-- [ ] run / sample-level 结果持久化；`promptopt run --dataset <file>` 手工数据集最小闭环
-- [ ] **Web 看板骨架页**（前置）：`go:embed` + htmx + SSE，浏览器实时看运行状态与事件流
-- [ ] 录制首个 demo GIF 进 README
+- [x] core 模型：Task / Candidate / Dataset / RunResult / Trace（structs + YAML/JSON artifact 序列化）
+- [x] eval 引擎：goroutine+errgroup 并行评估、全量 trace 捕获、指标（exact_match / f1 / json_validator / LLM-judge）——LLM-judge 于 V6 落地为 `llm_judge`（经 Provider 打分 + 中文诊断）
+- [x] 评估器返回 `(score, diagnosis)`——diagnosis 即 ASI，进反思上下文
+- [x] run / sample-level 结果持久化；`promptopt run --dataset <file>` 手工数据集最小闭环
+- [x] **Web 看板骨架页**（前置）：`go:embed` + SSE，浏览器实时看运行状态与事件流——实际交付为混合形态：SSE 流用原生 JS `EventSource`，交互局部刷新用 htmx（PRD-0000 前端栈决议修订，2026-09-30）
+- [ ] 录制首个 demo GIF 进 README——环境受限待录（README 已留占位注释）
 
 **验收**：手工数据集跑通评估并落盘；二次运行结果可查；trace 含输入/输出/评分/诊断；打开 localhost 即见实时事件流。
 
@@ -132,12 +132,12 @@ promptopt/                      # Go module（同仓库原地重写，单二进�
 
 **目标**：从单引擎到平台（Optimizer 接口兑现）。
 
-- [ ] Optimizer 插件接口固化（注册、能力声明、路由元数据）
-- [ ] ProTeGi 风格（文本梯度定向纠偏）
-- [ ] MIPROv2 风格（指令+Few-shot 联合搜索）
-- [ ] EvoPrompt 风格（GA/DE 群体搜索）
-- [ ] 范式路由器：按任务特征（单模块/复合/多维约束/预算紧张）选型
-- [ ] 插件开发文档 + examples 体系（≥3 个完整示例）
+- [x] Optimizer 插件接口固化（注册、能力声明、路由元数据）
+- [x] ProTeGi 风格（文本梯度定向纠偏）——实现与测试已合入（`internal/optimizers/protegi`：UCB1 折臂 bandit + 文本梯度 + 沿梯度改写）；builtin 注册行待补一行 `Register`，合入前 `--optimizer protegi` 不可达，auto 默认路由经可用性回退落 gepa 并在 manifest 记录原因
+- [x] MIPROv2 风格（指令+Few-shot 联合搜索）——seeded 联合采样 + minibatch 打分胜者全量准入（等价口径见包 doc）
+- [x] EvoPrompt 风格（GA/DE 群体搜索，`--evo-variant ga|de`）
+- [x] 范式路由器：按任务特征（单模块/复合/多维约束/预算紧张）选型——五级有序规则 + 降级链 + 可用性回退，决策全量落 manifest
+- [x] 插件开发文档 + examples 体系（[docs/plugins.md](docs/plugins.md) + 3 个完整示例，见 [examples/README.md](examples/README.md)）
 
 **验收**：同一任务可声明使用不同范式并对比结果；第三方可实现新 Optimizer 而不改核心。
 
@@ -145,12 +145,12 @@ promptopt/                      # Go module（同仓库原地重写，单二进�
 
 **目标**：进 CI、防退化（吸收旧 M4/M5）。
 
-- [ ] `--headless` 无头模式 + JSON 输出 + 退出码规范（0=成功 / 1=评估失败 / 2=预算耗尽 / 3=回归）
-- [ ] verify：锚点验证集（用户 3~5 条真实样本，ADR 0001）优先，降级为合成保留集 + 报告标注
-- [ ] regression detection + 约束检查（JSON validity 100% / 成本 / 延迟）
-- [ ] rollback（tag + artifact 天然支持一键回退）
-- [ ] GitHub Actions 集成模板
-- [ ] Release 规范：goreleaser 多平台单二进制产物 + changelog + README 的 GIF/截图随版本更新
+- [x] `--headless` 无头模式 + JSON 输出 + 退出码规范（0=成功 / 1=评估失败 / 2=预算耗尽 / 3=回归）
+- [x] verify：锚点验证集（用户 3~5 条真实样本，ADR 0001）优先，降级为合成保留集 + 报告标注
+- [x] regression detection + 约束检查（JSON validity 100% / 成本 `--max-avg-tokens` / 延迟 `--max-avg-latency-ms`，主指标退化阈值 `--max-regression`）
+- [x] rollback（tag + artifact 天然支持一键回退；采纳历史追加 `adopted-history.jsonl`，`--emit` 导出 candidate.yaml）
+- [x] GitHub Actions 集成模板（[optimize.yml](.github/workflows/optimize.yml)：PR 优化对比 + verify 门禁，缺 secrets 自动跳过）
+- [x] Release 规范：goreleaser 多平台单二进制产物 + changelog + README 的 GIF/截图随版本更新——goreleaser（darwin/linux × amd64/arm64）与 CHANGELOG 已落地，GIF 待录（环境受限）
 
 **验收**：PR 上可自动跑优化对比；新提示词不得在关键指标/约束上退化。
 

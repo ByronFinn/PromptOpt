@@ -175,3 +175,68 @@ CI（`.github/workflows/ci.yml`）与上述本地命令一致（vet / test -race
 ---
 
 *报告内所有结论均基于本会话实际读取的文件、执行的命令（第 4、5.1 节）或交办材料（第 5 节 JSON）；未验证项已逐条标注。*
+
+---
+
+# V5+V6 实施报告（2026-09-30 追加）
+
+> **日期**: 2026-09-30 | **范围**: V5 多范式扩展（commit `ff51f5c`，分支 `feat/v5-multi-paradigm`，52 文件 +7283/−604，已推送）+ V6 工程化与回归门禁（commit `6e50140`，分支 `feat/v6-engineering`，21 文件，已推送）
+> **对照文档**: [ROADMAP.md](ROADMAP.md) V5/V6 里程碑、[docs/plugins.md](docs/plugins.md)、[docs/release.md](docs/release.md)、[CHANGELOG.md](CHANGELOG.md)
+> **报告体系说明**: V2/V3 报告见 [docs/reports/](docs/reports/)；V4 以提交序列与 README/AGENTS 文档收尾（`35daf7a`）承载。本章节按既有风格（交付清单 / 验证证据 / 已知边界）追加，编号接续上文。
+
+## 8. V5 交付清单（commit `ff51f5c`）
+
+| 条目 | 状态 | 证据 |
+|---|---|---|
+| Optimizer 插件接口固化（注册、能力声明、路由元数据） | ✅ | `internal/optimizers/optimizers.go`：`Factory` / `Capabilities` / `Descriptor` / `Registry`（Register 重名/空名/nil panic、`Get` / `Names` 排序 / `Build` 未知名报错列可选）；`Request.Opts map[string]string` + `req.Opt("<paradigm>.<key>")`（internal/engine/optimizer.go）；ADR 0002 的"接口留在 engine"落地 |
+| engine 共享骨架公开化 + Loop 脚手架 | ✅ | `internal/engine/loop.go:48`（`NewLoop`：校验 + baseline 播种，Best 永不为空）、`loop.go:196`（`Admit`）、`calls.go:53`（`NewAdvisor`）、`candidate.go:43`（`ProduceCandidate` = Call + Defend + 质量门）；GEPA 重构为仅保留决策（rng / VISTA 梯子 / 算子阶梯），golden 测试护栏全绿 |
+| 范式路由器 | ✅ | `internal/optimizers/router.go:61-90`：五级有序规则（Pipeline→textgrad、TightBudget→p1、JointFewShot→miprov2、MultiConstraint→gepa、默认→protegi）+ 降级链 `degradeTo{textgrad→protegi, p1→gepa}` + 未注册范式可用性回退 gepa；决策三字段落 manifest（run.go:800-802 `optimizer` / `optimizer_requested` / `optimizer_route_reason`） |
+| ProTeGi 风格（文本梯度定向纠偏） | ⚠️ 实现✅ / 接线缺一行 | `internal/optimizers/protegi/`（protegi.go / bandit.go / gradient.go + 测试）：UCB1 折臂 bandit + 文本梯度 + 沿梯度改写。**builtin 注册行待补**（builtin.go:37-47 仍为注释示例）——`--optimizer protegi` 在 flag 校验被拒（run.go:635-637），auto 默认路由回退 gepa 并在 manifest 记录原因 |
+| MIPROv2 风格（指令+Few-shot 联合搜索） | ✅ | `internal/optimizers/miprov2/`（miprov2.go / demos.go / prompts.go + 测试）：一次提议 I=4 指令变体 + train 样本 demo 子集联合搜索，去泄漏 minibatch 打分→胜者全量准入；等价口径（seeded 联合采样 + 单级 promotion 替代 TPE 逐半淘汰）已在包 doc 记档；已注册（builtin.go:48-59） |
+| EvoPrompt 风格（GA/DE 群体搜索） | ✅ | `internal/optimizers/evoprompt/`（evoprompt.go / operators.go + 测试）：P=6 种群、锦标赛交叉/变异/差分变异（`--evo-variant ga|de`）、精英保留；已注册（builtin.go:60-71），Route 不指向它、仅显式可达 |
+| CLI 接线 | ✅ | `--optimizer`（默认 gepa，config.go:46）/ `--provider` / `--evo-variant` 三 flag（run.go:594-596）；合法集 = builtin.Names() ∪ {auto} 前置校验（run.go:628-637）；`--optimizer` 仅零配置模式生效（run.go:663-664）；路由特征派生 `routeFeatures`（run.go:389-405） |
+| Anthropic 原生 Provider | ⚠️ 实现✅ / CLI 桩 | `internal/provider/anthropic.go`（原生 `/v1/messages` + `x-api-key` + `anthropic-version`、system 抽取、thinking block→ReasoningContent、共享重试核心 `retry.go`）+ anthropic_test.go；**CLI `--provider anthropic` 仍为拒绝桩**（cmd/promptopt/provider.go:18-22），接线待合入一行 |
+| Web 范式接线 | ✅ | compare 概览表"范式"行经注册表解析 Label（未注册回退原名）；run.html live 事件 default 分支渲染 `[paradigm] type：stage`（范式专属事件可见） |
+| 插件开发文档 + examples 体系 | ✅ | [docs/plugins.md](docs/plugins.md)：接口与助手签名表、注册表字段、路由规则与升级路径、in-repo 接入三步、marker fake LLM 测试规范、事件契约、预算与产物契约；examples 扩至 3 个（json_extraction / sentiment_classification / text_summarization + examples/README.md 索引），全部含 ≥4 样本 expected 与中文 README |
+
+## 9. V6 交付清单（commit `6e50140`）
+
+| 条目 | 状态 | 证据 |
+|---|---|---|
+| 退出码规范（0/1/2/3） | ✅ | `cmd/promptopt/main.go:23-28`：`exitRegression = 3`，优先级 `2 > 1 > 3`；verify.go:60-66 doc comment 声明四态语义 |
+| `promptopt verify` 锚点验证 | ✅ | `cmd/promptopt/verify.go`：`--anchor`（≥3 条真实样本 dataset YAML，ADR 0001，写 anchor-dataset.json 留痕，verify.go:136-138）；无锚点降级为按原 run spec 独立重合成的同契约保留集，报告强制标注"结论未经真实数据验证"（verify.go:600）；交付=baseline 时零 LLM 调用跳过（verify.go:111-115）；产物落 `runs/<id>/verify/<时间戳>/` |
+| 回归判定 + 约束检查 | ✅ | 主指标均值退化阈值 `--max-regression`（默认 0.05，verify.go:43）；`json_validator` 任务交付侧 JSON 合法率 100% 硬检查；`--max-avg-tokens` / `--max-avg-latency-ms` 成本延迟上限（口径含 judge 开销，verify.go:198-199）；连接参数 flag > `PROMPTOPT_*` env > run manifest 回退 |
+| `promptopt rollback` | ✅ | `cmd/promptopt/rollback.go`：缺省回退上一不同采纳、兜底 baseline（旧工件缺 Prompt 时回退 synth spec 的 prompt_template），旧采纳追加 `adopted-history.jsonl`，`--to` 指定目标、`--emit` 导出 candidate.yaml |
+| `promptopt replay` | ✅ | `cmd/promptopt/replay.go`：按时间合并 events.jsonl 与四类调用留痕（baseline / opt-eval / optimizer / synthesis，replay.go:20-26）为审计时间线 + 覆盖率摘要；`--full` 展开全文、`--headless` JSONL |
+| `llm_judge` 指标 | ✅ | `internal/eval/judge.go:19`（`MetricLLMJudge`）：内置中文 rubric 0~1 打分 + ≤80 字诊断入 trace；Usage 口径改为样本总评估开销、judge 延迟以 `judge_ms` 单列 |
+| GitHub Actions 集成模板 | ✅ | `.github/workflows/optimize.yml`：PR 触发零配置优化 → verify 门禁（退出码 3 = PR 检查失败），缺 secrets 自动跳过，指标对照表渲染 PR 摘要页，产物上传 |
+| CI staticcheck 门禁 | ✅ | `.github/workflows/ci.yml`：vet / staticcheck（钉版 2026.2.1）/ modernize / test -race / build 五道齐备——闭合本报告第 6.2 节缺口 |
+| Release 规范 | ✅ | `.github/workflows/release.yml`（v* tag 触发，goreleaser 钉 v2.13.0）+ `.goreleaser.yaml`（darwin/linux × amd64/arm64，CGO_ENABLED=0，tar.gz + checksums，changelog 禁用自动生成）+ `CHANGELOG.md`（Keep a Changelog 1.1.0，人工维护为权威）+ `LICENSE`（MIT，闭合第 6.3 节死链缺口）+ `docs/release.md`（发布与门禁 runbook） |
+| 锚点用法示例 | ✅ | `examples/json_extraction/anchor.yaml`：3 条人工编写样本 |
+
+## 10. 验证证据（tcmsp-30 门禁）
+
+**本会话实际执行（2026-09-30）**：在 tcmsp-30（go1.26.5 linux/amd64，staticcheck 于 `~/go/bin`）独立沙盒 `~/PromptOpt-w-docsync`（rsync 同步本仓库 `6e50140` 提交树，参数 `--exclude .git --exclude runs --exclude synth --exclude dist --exclude .zcode --exclude .DS_Store`）依次执行五道门禁，**全部通过**：
+
+| 命令 | 结果 |
+|---|---|
+| `go vet ./...` | ✅ 无输出 |
+| `staticcheck ./...` | ✅ 无输出 |
+| `go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -test ./...`（过滤 `go: downloading`） | ✅ 无诊断输出 |
+| `go test -race ./...` | ✅ 12 个包全部 `ok`（cmd/promptopt、internal/config、internal/core、internal/engine、internal/eval、internal/harness、internal/optimizers、internal/optimizers/{evoprompt,miprov2,protegi}、internal/provider、internal/web；builtin 无测试文件） |
+| `go build ./...` | ✅ 无输出 |
+
+**佐证**：V5/V6 实现与提交代理按分工未执行 go 命令，交付材料记载门禁由工作流脚本在字节一致的树上跑绿；本会话在提交树上复跑结果一致。CI 远端（GitHub Actions）实际运行结果本次未查询（not run）；`optimize.yml` 的 PR 优化对比依赖仓库 secrets 配置，未在真实 PR 上演练（not run）。
+
+## 11. 已知边界与未覆盖项
+
+1. **protegi 注册缺口（一行式接线待补）**：`internal/optimizers/builtin/builtin.go:37-47` 的注册行仍为注释示例——`--optimizer protegi` 在 flag 校验被拒（可选值为 `auto, gepa, miprov2, evoprompt`）；auto 默认路由（请求 protegi）经可用性回退落 gepa 并在 manifest 记录原因。docs/plugins.md 头注已按此更新。
+2. **`--provider anthropic` CLI 拒绝桩**：`internal/provider/anthropic.go` 及测试已落地，`cmd/promptopt/provider.go:18-22` 的拒绝文案待替换为 `provider.NewAnthropic(baseURL, apiKey, provider.AnthropicConfig{})` 一行。
+3. **demo GIF 未录制**：环境受限待录（README 已留占位注释；PRD-0000 验收该项相应保持未勾）。
+4. **SQLite 未引入（决议修订）**：artifact 文件承担全部持久化；PRD-0000 已按"难逆转条件不满足"记 PRD 级决议修订（2026-09-30），非 ADR。
+5. **harness 合成无 seed**：多次零配置合成相互独立，严格 A/B 对比需 `--interactive` 检查点或手工三件套（examples/README.md 已如实标注对比局限）。
+6. **TightBudget 路由边界**：走完合成的零配置 run 探针 + baseline 至少消耗 `2×kept` 次评估，故 p1→gepa 路由记录只可能出现在预算耗尽（跳过优化循环）的 run 上（docs/plugins.md §3 已记载）。
+
+---
+
+*本章结论基于 2026-09-30 会话实际读取的仓库文件（提交 `6e50140`）、tcmsp-30 沙盒门禁执行（第 10 节）与 `gh issue list` 实测；未验证项已逐条标注。*

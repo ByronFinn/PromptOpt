@@ -1,8 +1,10 @@
 # PromptOpt 插件（范式）开发指南
 
-> V5 状态：本文档描述的骨架已落地（注册表 / 路由器 / engine 共享助手 / CLI 与 Web 接线）。
-> 三个范式子包 `protegi` / `miprov2` / `evoprompt` 由并行交付合入，合入前 `--optimizer` 的可选值
-> 以 `--optimizer bogus` 的报错清单为准（当前为 `auto, gepa`），auto 路由会为未注册范式回退
+> V5 状态：本文档描述的骨架与三个范式子包（`protegi` / `miprov2` / `evoprompt`）均已合入。
+> `--optimizer` 的可选值以 `--optimizer bogus` 的报错清单为准，当前为
+> `auto, gepa, miprov2, evoprompt`——protegi 的实现与测试已落地
+> （`internal/optimizers/protegi`），但 builtin 注册行待补一行 `Register`：
+> 合入前 `--optimizer protegi` 不可达，auto 默认路由（请求 protegi）回退
 > `gepa` 并在 manifest 记录原因。
 
 PromptOpt 的优化器范式以"插件"形态接入：一个范式 = 一个实现 `engine.Optimizer` 的子包 +
