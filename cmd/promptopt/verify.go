@@ -98,6 +98,15 @@ type verifyOptions struct {
 	judgeDecisionDiagBelow  float64
 
 	headless bool
+
+	// 配置文件层（PRD-0001 切分 1）：configPath 是 --config 的原始值；
+	// cfgFile 是发现命中的严格解码结果（nil = 未命中）。文件层在 verify
+	// 只补位连接身份白名单（11 键，R2 #1）——行为键（extra_body/rps/
+	// judge_max_tokens/judge_backend/两阈值）一律不从 file 取值：manifest
+	// 的行为键全部 omitempty，「缺失」无法区分「run 显式 0」与「run 未
+	// 给」，补位等于静默认证一个 run 从未跑过的场景。
+	configPath string
+	cfgFile    *config.File
 }
 
 // verifyCommand re-validates a finished run's delivered candidate
@@ -338,20 +347,34 @@ func parseVerifyFlags(args []string) (verifyOptions, string, error) {
 	fs.IntVar(&o.budgetTokens, "budget-tokens", 0, "executor token budget PER SIDE, prompt+completion (0 = unlimited)")
 	fs.IntVar(&o.budgetEvals, "budget-evals", 0, "max executor evaluations PER SIDE (0 = unlimited)")
 	fs.BoolVar(&o.headless, "headless", false, "print only the JSON verify report")
+	fs.StringVar(&o.configPath, "config", "", "配置文件路径（发现序第一层：显式给定而缺失即硬错；缺省按 PROMPTOPT_CONFIG > ./promptopt.yaml > 用户级 promptopt/config.yaml 发现；仅连接身份白名单键参与补位）")
 	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
 		return o, "", err
 	}
 	if fs.NArg() != 1 {
 		return o, "", fmt.Errorf("expected exactly one run id, got %d arguments", fs.NArg())
 	}
-	fs.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "rps":
-			o.rpsSet = true
-		case "extra-body":
-			o.extraBodySet = true
+	// 单一来源收集器式显式标记（与 parseRunFlags 同构）：fs.Visit 一次
+	// 标记，rps/extra-body 的显式性从此派生。
+	explicit := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	o.rpsSet, o.extraBodySet = explicit["rps"], explicit["extra-body"]
+	// 配置文件层：命中即严格解码，损坏硬错；行为键不参与补位（结构
+	// 注释），白名单键在 resolveVerifyConn 落位。文件 timeout 的文法在
+	// 这里先行校验（解析期用法错，早于任何评估烧钱）。
+	disc, err := config.Discover(o.configPath)
+	if err != nil {
+		return o, "", err
+	}
+	if disc.Warning != "" {
+		fmt.Fprintln(os.Stderr, "promptopt verify: "+disc.Warning)
+	}
+	o.cfgFile = disc.File
+	if o.cfgFile != nil {
+		if _, err := config.ParseTimeout(string(o.cfgFile.Timeout)); err != nil {
+			return o, "", fmt.Errorf("配置文件 %s: %w", disc.Path, err)
 		}
-	})
+	}
 	// --extra-body must parse as a JSON object before any evaluation
 	// burns budget on a typo.
 	if o.extraBodySet {
@@ -363,9 +386,9 @@ func parseVerifyFlags(args []string) (verifyOptions, string, error) {
 	}
 	// --timeout parses strictly on the flag side; env resolution joins
 	// in resolveVerifyConn (flag > env > manifest).
-	timeout, err := config.ParseTimeout(rawTimeout)
+	timeout, err := validateTimeout(rawTimeout)
 	if err != nil {
-		return o, "", fmt.Errorf("--timeout: %w", err)
+		return o, "", err
 	}
 	o.timeout = timeout
 	var errs []error
@@ -433,67 +456,94 @@ func parseVerifyFlags(args []string) (verifyOptions, string, error) {
 
 // resolveVerifyConn applies the connection contract shared with CI (no
 // flags needed when PROMPTOPT_* env or the manifest carry the values):
-// provider = flag > manifest > openai; base URL and model = flag > env >
-// manifest, all empty being a usage error. The API key never persists in
-// the manifest and keeps the env default "1".
+// provider = flag > manifest > 文件 > openai; base URL and model = flag
+// > env > manifest > 文件, all empty being a usage error. The API key
+// never persists in the manifest; its chain is flag > env > 文件 > "1".
+//
+// 文件层收窄为连接身份白名单（R2 #1，PRD-0001 D2）：仅 11 个白名单键对
+// manifest 缺失/omitempty 的位置补位——旧工件在「env 也没有」的机器上
+// 仍可运行，且连接身份不改写测量语义。白名单外的行为键（extra_body /
+// rps / judge_max_tokens / judge_backend / 两阈值）一律不从 file 取值：
+// manifest 的行为键全部 omitempty，「缺失」无法区分「run 显式 0」与
+// 「run 未给」，补位等于静默认证一个 run 从未跑过的场景，污染回归门禁。
 //
 // The judge surface resolves its own chain flag > PROMPTOPT_JUDGE_* env
-// > manifest so verify reproduces the run's judge setup (research 0001
-// §3.4); empty values fall back to the executor side inside eval.Engine,
-// and the judge API key falls back to the executor key chain.
+// > manifest > 文件（白名单键）so verify reproduces the run's judge
+// setup (research 0001 §3.4); empty values fall back to the executor
+// side inside eval.Engine, and the judge API key falls back to the
+// executor key chain.
 //
 // The outbound pacing and extra body follow flag > manifest (--rps 0 /
 // --extra-body ” with the flag explicitly set override the snapshot,
-// otherwise the run's own pacing and gateway extras replay); the
-// per-attempt timeout follows flag > PROMPTOPT_TIMEOUT env >
-// manifest.timeout_seconds (always positive, no explicit-off).
+// otherwise the run's own pacing and gateway extras replay — 文件层不
+// 参与); the per-attempt timeout follows flag > PROMPTOPT_TIMEOUT env >
+// manifest.timeout_seconds > 文件 (always positive, no explicit-off).
 func resolveVerifyConn(o verifyOptions, mf runManifest) (verifyOptions, error) {
-	o.providerName = cmp.Or(o.providerName, mf.Provider, "openai")
-	o.baseURL = cmp.Or(o.baseURL, os.Getenv(config.EnvBaseURL), mf.BaseURL)
+	var f *config.File
+	if o.cfgFile != nil {
+		f = o.cfgFile
+	} else {
+		f = &config.File{}
+	}
+	// 白名单补位只发生在 manifest omitempty 之后：manifest 有的键文件
+	// 永远够不着（「当时的值」压过「现在的状态」）。
+	o.providerName = cmp.Or(o.providerName, mf.Provider, f.Provider, "openai")
+	o.baseURL = cmp.Or(o.baseURL, os.Getenv(config.EnvBaseURL), mf.BaseURL, f.BaseURL)
 	if o.baseURL == "" {
-		return o, errors.New("--base-url (或 PROMPTOPT_BASE_URL，或 manifest.base_url) is required")
+		return o, errVerifyBaseURLRequired
 	}
-	o.model = cmp.Or(o.model, os.Getenv(config.EnvModel), mf.Model)
+	o.model = cmp.Or(o.model, os.Getenv(config.EnvModel), mf.Model, f.Model)
 	if o.model == "" {
-		return o, errors.New("--model (或 PROMPTOPT_MODEL，或 manifest.model) is required")
+		return o, errVerifyModelRequired
 	}
-	o.apiKey = config.APIKey(o.apiKey)
+	o.apiKey = config.APIKey(o.apiKey, f.APIKey)
 	if !o.rpsSet {
 		o.rps = mf.RPS
 	}
 	if !o.extraBodySet {
 		o.extraBody = mf.ExtraBody
 	}
-	// The per-attempt deadline: flag > env > manifest snapshot; 0 falls
-	// through to the providers' 180s default.
-	o.timeout = cmp.Or(o.timeout, config.Timeout(0), time.Duration(mf.TimeoutSeconds)*time.Second)
+	// The per-attempt deadline: flag > env > manifest snapshot > 文件
+	// (白名单补位在 manifest 之后); 0 falls through to the providers'
+	// 180s default. The file timeout re-parses here (already validated
+	// at parse time) so the whitelist backfill is self-contained for
+	// hand-built callers too.
+	fileTimeout, err := config.ParseTimeout(string(f.Timeout))
+	if err != nil {
+		return o, fmt.Errorf("配置文件 timeout: %w", err)
+	}
+	o.timeout = cmp.Or(o.timeout, config.Timeout(0, 0), time.Duration(mf.TimeoutSeconds)*time.Second, fileTimeout)
 
-	o.judgeProvider = cmp.Or(o.judgeProvider, os.Getenv(config.EnvJudgeProvider), mf.JudgeProvider)
+	o.judgeProvider = cmp.Or(o.judgeProvider, os.Getenv(config.EnvJudgeProvider), mf.JudgeProvider, f.JudgeProvider)
 	if o.judgeProvider != "" && o.judgeProvider != "openai" && o.judgeProvider != "anthropic" {
 		return o, fmt.Errorf("--judge-provider must be openai or anthropic, got %q", o.judgeProvider)
 	}
-	o.judgeBaseURL = cmp.Or(o.judgeBaseURL, os.Getenv(config.EnvJudgeBaseURL), mf.JudgeBaseURL)
-	o.judgeModel = cmp.Or(o.judgeModel, os.Getenv(config.EnvJudgeModel), mf.JudgeModel)
-	o.judgeMaxTokens = config.JudgeMaxTokens(o.judgeMaxTokens)
+	o.judgeBaseURL = cmp.Or(o.judgeBaseURL, os.Getenv(config.EnvJudgeBaseURL), mf.JudgeBaseURL, f.JudgeBaseURL)
+	o.judgeModel = cmp.Or(o.judgeModel, os.Getenv(config.EnvJudgeModel), mf.JudgeModel, f.JudgeModel)
+	// judge_max_tokens 是行为键：不从 file 补位（R2 #1）。
+	o.judgeMaxTokens = config.JudgeMaxTokens(o.judgeMaxTokens, false, 0)
 	if o.judgeMaxTokens == 0 {
 		o.judgeMaxTokens = mf.JudgeMaxTokens
 	}
-	o.judgeAPIKey = config.JudgeAPIKey(o.judgeAPIKey)
+	o.judgeAPIKey = config.JudgeAPIKey(o.judgeAPIKey, f.JudgeAPIKey)
 	// Decision surface (P7): backend flag > manifest (no env — the
-	// backend is an explicit opt-in); connection fields flag > env >
-	// manifest; thresholds flag > manifest with 0 = the eval-package
+	// backend is an explicit opt-in, 文件层不补位); connection fields
+	// flag > env > manifest > 文件（白名单键）; thresholds flag >
+	// manifest（行为键，文件层不补位）with 0 = the eval-package
 	// defaults. The completeness check runs after the merge so
 	// manifest/env-provided values count.
 	o.judgeBackend = cmp.Or(o.judgeBackend, mf.JudgeBackend)
 	if o.judgeBackend != "" && o.judgeBackend != eval.JudgeBackendLLM && o.judgeBackend != eval.JudgeBackendDecision {
 		return o, fmt.Errorf("judge backend must be %s or %s, got %q", eval.JudgeBackendLLM, eval.JudgeBackendDecision, o.judgeBackend)
 	}
-	o.judgeDecisionURL = cmp.Or(o.judgeDecisionURL, os.Getenv(config.EnvJudgeDecisionURL), mf.JudgeDecisionURL)
-	o.judgeDecisionModel = cmp.Or(o.judgeDecisionModel, os.Getenv(config.EnvJudgeDecisionModel), mf.JudgeDecisionModel)
+	o.judgeDecisionURL = cmp.Or(o.judgeDecisionURL, os.Getenv(config.EnvJudgeDecisionURL), mf.JudgeDecisionURL, f.JudgeDecisionURL)
+	o.judgeDecisionModel = cmp.Or(o.judgeDecisionModel, os.Getenv(config.EnvJudgeDecisionModel), mf.JudgeDecisionModel, f.JudgeDecisionModel)
 	o.judgeDecisionConfidence = cmp.Or(o.judgeDecisionConfidence, mf.JudgeDecisionConfidence)
 	o.judgeDecisionDiagBelow = cmp.Or(o.judgeDecisionDiagBelow, mf.JudgeDecisionDiagBelow)
 	if o.judgeBackend == eval.JudgeBackendDecision && (o.judgeDecisionURL == "" || o.judgeDecisionModel == "") {
-		return o, errors.New("--judge-backend decision 需要 --judge-decision-url 与 --judge-decision-model（或对应 env / manifest 快照）")
+		// D5 四途径指路（含 manifest 快照与 config 键指引）；config set
+		// 不拦跨键完整性，这里就是完整性报错的落点。
+		return o, errVerifyDecisionRequired
 	}
 	return o, nil
 }

@@ -234,6 +234,24 @@ promptopt anchor promote --task-key tcm [--ids id1,id2]                      # �
 
 `promptopt mcp` 在 stdin/stdout 上提供 newline-delimited JSON-RPC 2.0 三工具——`optimize`（同步一次 headless run，载荷读回 `summary.json` 磁盘真源）、`verify`（回归门禁，连接参数按 manifest 复现链、载荷读回 `verify.json`）、`runs`（运行摘要卡片）；stdout 只走协议帧，人类可读输出走 stderr。单机单会话、无鉴权、无多用户（PRD Out of Scope 不动摇）；协议取舍与工具契约详见 [docs/mcp.md](docs/mcp.md)。
 
+### config：配置文件与必填引导
+
+`promptopt config` 把「这台机器跟哪个 LLM 说话」沉淀为 YAML 配置文件，`run`/`verify`/`mcp` 三面同链生效——链序 run/mcp 为 flag > `PROMPTOPT_*` env > 文件 > 默认（10 键显式性标记：flag 显式给定——含显式 0——终判压过文件）；verify 主链 flag > env > run manifest > 默认，文件层仅对 11 个连接身份键（provider/base_url/model/api_key/timeout/judge_*连接/judge_decision_url/model）补位，extra_body/rps/judge_max_tokens 等行为键一律不从文件取值（manifest 缺失无法区分「显式 0」与「未给」，补位等于认证一个 run 从未跑过的场景）。发现序 `--config` > `PROMPTOPT_CONFIG` > `./promptopt.yaml` > 用户级 `promptopt/config.yaml`，首个存在的文件命中即止、命中即严格解码（未知键/类型错/语法错硬错退出 1）；键面 22 键（YAML 键 = flag 名 `-`→`_`），预算/轮数/温度/reps 等成本行为旋钮绝不入文件。
+
+```bash
+promptopt config init                        # 九问向导生成配置（默认用户级；--scope project 写 ./promptopt.yaml）
+promptopt config init --api-key - < keyfile  # 密钥在向导前从 stdin 前置读取，不进 shell history/ps
+printf '%s\n' "$KEY" | promptopt config set api_key -    # 单键写入，值为 - 时整读 stdin
+promptopt config list                        # 生效值 + 逐键来源（人类可读走 stderr；--headless 出 JSON 到 stdout）
+promptopt config get model                   # 单键生效值与来源（file 来源附命中路径）
+promptopt config unset api_key               # 删除键，回落链自然接管（键不存在幂等成功）
+```
+
+- **来源可见**：`config list` 首行打印命中文件路径（`# config:`），并列出存在但被遮蔽的低优先级文件（`# shadowed:`）——「为什么生效的是这个值」要求命中与遮蔽都可见
+- **安全闸**：写文件 0600、目录 0700；api_key/judge_api_key 显示恒掩码；project 作用域结果含密钥时幂等追加 `.gitignore`；run 读取侧对宽松权限文件按 `perm & 0o077` 位运算告警（警告不报错）
+- **写回语义**：set/unset 对现有文件严格解码，损坏即报错退出 1 且文件逐字节不变（原位改写保注释）；init 目标已存在时列出将被覆盖的键，非 tty 无 `--force` 拒绝覆盖
+- **缺参引导**：run/verify 缺 `--base-url`/`--model` 时报错一次给全三种/四种配置途径（flag / env / `config init`，verify 额外含 manifest 快照），`--judge-backend decision` 缺参附 `config set judge_decision_url / judge_decision_model` 键指引；退出码保持 1
+
 ### CI 集成与 Release
 
 - [`.github/workflows/optimize.yml`](.github/workflows/optimize.yml)：PR 优化对比模板——PR 上自动跑零配置优化 → `verify` 同契约保留集门禁（退出码 3 = PR 检查失败），缺 secrets 自动跳过，指标对照表渲染进 PR 摘要页

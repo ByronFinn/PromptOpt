@@ -92,6 +92,25 @@ type runOptions struct {
 	rps       float64
 	extraBody map[string]any
 	timeout   time.Duration
+
+	// 配置文件层（PRD-0001 切分 1）：configPath 是 --config 的原始值
+	//（发现序第一层）；sources 是 22 个文件键的逐键来源表——单一收集
+	// 器（R2 #5）：10 键显式性判定派生自 Source==flag，切分 4 的快照
+	// 来源标注复用同一张表，parseRunFlags 不另立 per-key bool 并存。
+	configPath string
+	sources    config.KeySources
+
+	// 配置文件层命中现场（parseRunFlags 的 Discover 结果）：设置页快照
+	// 的来源可见性（R1 #10——Web 设置页与 config list 同样必须展示命中
+	// 路径与被遮蔽文件）。无文件命中时两者皆零值。
+	configHitPath  string
+	configShadowed []string
+
+	// specMetrics 钉死零配置合成规格的指标（PRD-0001 D7 切分 3，
+	// --spec-metrics / 文件键 spec_metrics）：仅零配置模式合法，覆盖点
+	// 在 harness.Pipeline（SynthesizeSpec 之后、样本合成之前）。空 =
+	// 现状 LLM 自选；不新增 --spec-primary（primary 回落列表首项）。
+	specMetrics []string
 }
 
 // runCommand implements the run subcommand. With a positional prompt
@@ -191,7 +210,7 @@ func runManual(o runOptions, stdout io.Writer) int {
 		Samples: len(samples), Provider: o.providerName,
 		RPS: o.rps, ExtraBody: o.extraBody,
 		TimeoutSeconds: int(o.timeout.Seconds()),
-		JudgeProvider: o.judgeProvider, JudgeBaseURL: o.judgeBaseURL,
+		JudgeProvider:  o.judgeProvider, JudgeBaseURL: o.judgeBaseURL,
 		JudgeModel: o.judgeModel, JudgeMaxTokens: o.judgeMaxTokens,
 		JudgeBackend: o.judgeBackend, JudgeDecisionURL: o.judgeDecisionURL,
 		JudgeDecisionModel:      o.judgeDecisionModel,
@@ -329,9 +348,10 @@ func runSynthesized(o runOptions, stdout io.Writer) int {
 		StagnationLimit: o.stagnationLimit, Seed: o.seed,
 		BudgetOptTokens: o.budgetOptTokens,
 		Optimizer:       o.optimizer, Provider: o.providerName, EvoVariant: o.evoVariant,
-		RPS: o.rps, ExtraBody: o.extraBody,
+		SpecMetrics: o.specMetrics,
+		RPS:         o.rps, ExtraBody: o.extraBody,
 		TimeoutSeconds: int(o.timeout.Seconds()),
-		JudgeProvider: o.judgeProvider, JudgeBaseURL: o.judgeBaseURL,
+		JudgeProvider:  o.judgeProvider, JudgeBaseURL: o.judgeBaseURL,
 		JudgeModel: o.judgeModel, JudgeMaxTokens: o.judgeMaxTokens,
 		JudgeBackend: o.judgeBackend, JudgeDecisionURL: o.judgeDecisionURL,
 		JudgeDecisionModel:      o.judgeDecisionModel,
@@ -359,6 +379,7 @@ func runSynthesized(o runOptions, stdout io.Writer) int {
 		JudgeDecisionConfidence: o.judgeDecisionConfidence,
 		JudgeDecisionDiagBelow:  o.judgeDecisionDiagBelow,
 		ExtraBody:               o.extraBody,
+		SpecMetrics:             o.specMetrics,
 		SamplesN:                o.samples, ProbeVariants: o.probeVariants, Workers: o.workers,
 		Budget:  budget,
 		Mode:    mode,
@@ -830,6 +851,11 @@ func startSink(o runOptions, runDir, synthDir string) (*runSink, error) {
 	if o.web {
 		sink.bus = web.NewBus()
 		sink.unhookBus = sink.fanout.subscribe(sink.bus.Publish)
+		// 设置页快照（PRD-0001 切分 4 / D6，仿 sink 注入法）：起看板前
+		// 发布合并后 options 的逐键值与来源（含 flag 层）——run --web 下
+		// 真相在手的进程不得显示错误值（R1 #7：「文件 0.7 + flag 显式 0」
+		// 页面必须显示 0）。零 NewServer 签名变更。
+		config.PublishSnapshot(runConfigSnapshot(o))
 		listen := o.listenAddr()
 		dashboard, err := web.NewServer(o.outDir, synthDir, sink.bus).Listen(listen)
 		if err != nil {
@@ -841,6 +867,46 @@ func startSink(o runOptions, runDir, synthDir string) (*runSink, error) {
 	}
 	liveSinks.Store(sink, struct{}{})
 	return sink, nil
+}
+
+// runConfigSnapshot builds the settings-page snapshot for this run
+// （PRD-0001 切分 4 / D6）：逐键值取合并后的 options（即该 run 实际生效
+// 值），来源取 o.sources——P1 单一 per-key 收集器的同一张表（R2 #5，
+// 禁止第二套 bool/map），命中现场（路径/被遮蔽文件）取 parseRunFlags 的
+// Discover 结果（R1 #10）。default 来源的行显示解析链缺省（如 timeout
+// 0 = 构造器 180s）；显式 flag 0 保留字面 0——那才是 run 的真相。
+func runConfigSnapshot(o runOptions) *config.Snapshot {
+	row := func(key string, val any) config.SnapshotKey {
+		return config.NewSnapshotKey(key, val, o.sources[key])
+	}
+	return &config.Snapshot{
+		HitPath:  o.configHitPath,
+		Shadowed: o.configShadowed,
+		Keys: []config.SnapshotKey{
+			row("provider", o.providerName),
+			row("base_url", o.baseURL),
+			row("model", o.model),
+			row("api_key", o.apiKey),
+			row("max_tokens", o.maxTokens),
+			row("timeout", o.timeout),
+			row("rps", o.rps),
+			row("extra_body", o.extraBody),
+			row("out", o.outDir),
+			row("judge_provider", o.judgeProvider),
+			row("judge_base_url", o.judgeBaseURL),
+			row("judge_model", o.judgeModel),
+			row("judge_api_key", o.judgeAPIKey),
+			row("judge_max_tokens", o.judgeMaxTokens),
+			row("judge_backend", o.judgeBackend),
+			row("judge_decision_url", o.judgeDecisionURL),
+			row("judge_decision_model", o.judgeDecisionModel),
+			row("judge_decision_confidence", o.judgeDecisionConfidence),
+			row("judge_decision_diag_below", o.judgeDecisionDiagBelow),
+			row("optimizer", o.optimizer),
+			row("evo_variant", o.evoVariant),
+			row("spec_metrics", o.specMetrics),
+		},
+	}
 }
 
 // liveSinks tracks every opened-but-unclosed runSink. The run path
@@ -1099,12 +1165,13 @@ func readLatestVerifyReport(runDir string) (verifyReport, bool) {
 
 // parseRunFlags parses and validates the run flag surface. Environment
 // fallbacks (PROMPTOPT_BASE_URL/MODEL/API_KEY/OUT) apply to unset
-// flags; workers and addr are flag-only by design. A single positional
-// argument switches to the zero-config mode, and flags may appear
-// before or after it.
+// flags, and the config file layer (PRD-0001 切分 1) slots between env
+// and the defaults: flag > env > 文件 > 默认, the chain owned by the
+// config package's resolvers. Workers and addr are flag-only by
+// design. A single positional argument switches to the zero-config
+// mode, and flags may appear before or after it.
 func parseRunFlags(args []string) (runOptions, error) {
 	var o runOptions
-	addrSet, portSet, optimizerSet, evoVariantSet := false, false, false, false
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&o.taskPath, "task", "", "task YAML path (required without a positional prompt)")
@@ -1123,6 +1190,8 @@ func parseRunFlags(args []string) (runOptions, error) {
 	fs.IntVar(&o.workers, "workers", config.DefaultWorkers, "parallel evaluation workers")
 	fs.IntVar(&o.samples, "samples", config.DefaultSamples, "synthesized sample count (zero-config mode)")
 	fs.IntVar(&o.probeVariants, "probe-variants", config.DefaultProbeVariants, "probe prompt variants for variance filtering (zero-config mode)")
+	var rawSpecMetrics string
+	fs.StringVar(&rawSpecMetrics, "spec-metrics", "", "comma list pinning the synthesized spec's metrics, e.g. \"llm_judge,f1\" (zero-config mode; empty = the LLM chooses; each item must be a valid metric, no --spec-primary: the primary falls back to the first item)")
 	fs.IntVar(&o.maxRounds, "max-rounds", config.DefaultMaxRounds, "GEPA optimization rounds (zero-config mode)")
 	fs.IntVar(&o.minibatch, "minibatch", config.DefaultMinibatch, "samples drawn per reflection round (zero-config mode)")
 	fs.Float64Var(&o.epsilon, "epsilon", config.DefaultEpsilon, "exploration rate of hypothesis selection, 0..1 (zero-config mode)")
@@ -1153,6 +1222,7 @@ func parseRunFlags(args []string) (runOptions, error) {
 	fs.IntVar(&o.port, "port", 0, "dashboard listen port when --addr is host-only (default 17700; implies dashboard; a full host:port --addr rejects --port)")
 	fs.BoolVar(&o.web, "web", false, "serve a live SSE dashboard during the run")
 	fs.BoolVar(&o.headless, "headless", false, "print only the JSON run summary")
+	fs.StringVar(&o.configPath, "config", "", "配置文件路径（发现序第一层：显式给定而缺失即硬错；缺省按 PROMPTOPT_CONFIG > ./promptopt.yaml > 用户级 promptopt/config.yaml 发现，命中即严格解码）")
 	// The stdlib flag package stops parsing at the first positional,
 	// but the natural zero-config invocation puts flags after the
 	// prompt (`promptopt run "<prompt>" --samples 3`): reorder so both
@@ -1167,25 +1237,29 @@ func parseRunFlags(args []string) (runOptions, error) {
 		return o, err
 	}
 	o.extraBody = extraBody
-	// --timeout parses strictly (flag side); env resolution happens
-	// after, without failing runs over a malformed optional env.
-	o.timeout, err = config.ParseTimeout(rawTimeout)
+	// --timeout parses strictly (flag side); env/file resolution joins
+	// in the merge below, without failing runs over a malformed
+	// optional env.
+	o.timeout, err = validateTimeout(rawTimeout)
 	if err != nil {
-		return o, fmt.Errorf("--timeout: %w", err)
+		return o, err
 	}
-	o.timeout = config.Timeout(o.timeout)
-	fs.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "addr":
-			addrSet = true
-		case "port":
-			portSet = true
-		case "optimizer":
-			optimizerSet = true
-		case "evo-variant":
-			evoVariantSet = true
-		}
-	})
+	// --spec-metrics（D7）：逗号列表先行拆分裁剪，与 config set 的
+	// spec_metrics 值共用同一 splitSpecMetrics 通道；flag 侧的显式空值
+	// = 显式「LLM 自选」（终判压过文件层，--extra-body "" 同规）在拆分
+	// 前短路——splitSpecMetrics 对空串产出一项空串（config set 侧把
+	// 真空项留给 validateMetricsList 报错，语义归 P2 所有，此处不改）。
+	var specMetricsFlag []string
+	if strings.TrimSpace(rawSpecMetrics) != "" {
+		specMetricsFlag = splitSpecMetrics(rawSpecMetrics)
+	}
+	// 单一来源收集器（R2 #5）：fs.Visit 一次性标记全部显式 flag——文件
+	// 层合并、10 键显式性判定与切分 4 的快照来源标注共用这一张表，
+	// parseRunFlags 不另立 per-key bool 与快照 map 并存。
+	explicit := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	addrSet, portSet := explicit["addr"], explicit["port"]
+	optimizerSet, evoVariantSet := explicit["optimizer"], explicit["evo-variant"]
 	switch fs.NArg() {
 	case 0:
 	case 1:
@@ -1194,20 +1268,80 @@ func parseRunFlags(args []string) (runOptions, error) {
 		return o, fmt.Errorf("unexpected argument %q (a single positional prompt enables the zero-config mode)", fs.Arg(1))
 	}
 
+	// 配置文件层（PRD-0001 切分 1）：四层发现序，首个存在的文件命中即
+	// 止，命中即严格解码，损坏硬错（显式层连「存在」都严格——宣称失败
+	// 必须响，隐含层缺失是常态静默跳过）。权限告警只走 stderr 一行，
+	// 不报错（CI umask 千差万别）。
+	disc, err := config.Discover(o.configPath)
+	if err != nil {
+		return o, err
+	}
+	// 命中现场入 options：设置页快照的来源可见性（R1 #10，切分 4）。
+	o.configHitPath, o.configShadowed = disc.Path, disc.Shadowed
+	if disc.Warning != "" {
+		fmt.Fprintln(os.Stderr, "promptopt run: "+disc.Warning)
+	}
+	cfg := disc.File
+	if cfg == nil {
+		cfg = &config.File{}
+	}
+	// 文件 timeout 是书写面：文法非法即用法错（与 flag 同一 ParseTimeout
+	// 文法），绝不静默读作 unset。
+	fileTimeout, err := config.ParseTimeout(string(cfg.Timeout))
+	if err != nil {
+		return o, fmt.Errorf("配置文件 %s: %w", disc.Path, err)
+	}
+
+	// 合并在校验之前：文件层提供的值与 flag/env 值走完全相同的校验路径
+	//（rps<0、confidence 越界等照报，报错值不分来源）。无文件时各
+	// resolver 与旧三层语义逐字段相等（D2 字节级不变第一层，parity 表
+	// 钉死在 config 包测试）。
+	o.maxTokens = config.MaxTokens(o.maxTokens, explicit["max-tokens"], cfg.MaxTokens)
+	o.providerName = config.Provider(o.providerName, explicit["provider"], cfg.Provider)
+	o.rps = config.RPS(o.rps, explicit["rps"], cfg.RPS)
+	o.extraBody = config.ExtraBody(o.extraBody, explicit["extra-body"], cfg.ExtraBody)
+	o.optimizer = config.Optimizer(o.optimizer, explicit["optimizer"], cfg.Optimizer)
+	o.evoVariant = config.EvoVariant(o.evoVariant, explicit["evo-variant"], cfg.EvoVariant)
+	o.specMetrics = config.SpecMetrics(specMetricsFlag, explicit["spec-metrics"], cfg.SpecMetrics)
+	o.judgeBackend = config.JudgeBackend(o.judgeBackend, cfg.JudgeBackend)
+	o.timeout = config.Timeout(o.timeout, fileTimeout)
+	o.sources = config.DeriveSources(explicit, cfg)
+
+	// configured（三件套）模式的范式键提示（D3/R1 #5）：文件承载的
+	// optimizer/evo_variant/spec_metrics 在该模式下不生效——提示而非
+	// 静默（范式 flag「不得静默通过」成文哲学延伸到文件层），也不硬错
+	//（CI 复用机器文件跑三件套不该被炸）。
+	if o.prompt == "" && (cfg.Optimizer != "" || cfg.EvoVariant != "" || len(cfg.SpecMetrics) > 0) {
+		var keys []string
+		if cfg.Optimizer != "" {
+			keys = append(keys, "optimizer")
+		}
+		if cfg.EvoVariant != "" {
+			keys = append(keys, "evo_variant")
+		}
+		if len(cfg.SpecMetrics) > 0 {
+			keys = append(keys, "spec_metrics")
+		}
+		fmt.Fprintf(os.Stderr, "promptopt run: 配置文件 %s 中的 %s 在配置模式（task/candidate/dataset 三件套）下不生效（该模式无优化循环）\n",
+			disc.Path, strings.Join(keys, "/"))
+	}
+
 	var errs []error
 	// --optimizer is validated up front against the builtin registry
 	// (plus "auto") in both modes: failing before the synthesis
 	// pipeline runs beats burning its budget only to error at Build
 	// time.
-	validOptimizers := builtin.Registry().Names()
-	validOptimizers = append(validOptimizers, "auto")
-	slices.Sort(validOptimizers)
-	if !slices.Contains(validOptimizers, o.optimizer) {
-		errs = append(errs, fmt.Errorf("--optimizer %q is not a registered paradigm (available: %s)",
-			o.optimizer, strings.Join(validOptimizers, ", ")))
+	if err := validateOptimizer(o.optimizer); err != nil {
+		errs = append(errs, err)
 	}
-	if o.providerName != "openai" && o.providerName != "anthropic" {
-		errs = append(errs, fmt.Errorf("--provider must be openai or anthropic, got %q", o.providerName))
+	if err := validateProvider(o.providerName); err != nil {
+		errs = append(errs, err)
+	}
+	// --spec-metrics（D7）：合并后的列表不分来源走同一 validateMetricsList
+	// 准入（flag/file 报错同一段语义）；llm_judge 合法——引擎在注册表
+	// 之前特判分发。
+	if err := validateMetricsList(o.specMetrics); err != nil {
+		errs = append(errs, err)
 	}
 	// The task key names a library directory — reject path traversal
 	// before anything is written under it.
@@ -1218,16 +1352,14 @@ func parseRunFlags(args []string) (runOptions, error) {
 	}
 	// The judge provider mirrors the --provider whitelist up front so a
 	// typo fails before the synthesis pipeline burns its budget.
-	if o.judgeProvider != "" && o.judgeProvider != "openai" && o.judgeProvider != "anthropic" {
-		errs = append(errs, fmt.Errorf("--judge-provider must be openai or anthropic, got %q", o.judgeProvider))
+	if err := validateJudgeProvider(o.judgeProvider); err != nil {
+		errs = append(errs, err)
 	}
 	if o.judgeMaxTokens < 0 {
 		errs = append(errs, fmt.Errorf("--judge-max-tokens must be zero (reuse --max-tokens) or positive, got %d", o.judgeMaxTokens))
 	}
-	switch o.judgeBackend {
-	case "", eval.JudgeBackendLLM, eval.JudgeBackendDecision:
-	default:
-		errs = append(errs, fmt.Errorf("--judge-backend must be %s or %s, got %q", eval.JudgeBackendLLM, eval.JudgeBackendDecision, o.judgeBackend))
+	if err := validateJudgeBackend(o.judgeBackend); err != nil {
+		errs = append(errs, err)
 	}
 	if o.judgeDecisionConfidence < 0 || o.judgeDecisionConfidence > 1 {
 		errs = append(errs, fmt.Errorf("--judge-decision-confidence must be within [0, 1] (0 = default), got %v", o.judgeDecisionConfidence))
@@ -1264,6 +1396,12 @@ func parseRunFlags(args []string) (runOptions, error) {
 		}
 		if evoVariantSet {
 			errs = append(errs, errors.New("--evo-variant only takes effect in the zero-config mode"))
+		}
+		// --spec-metrics 与三件套互斥（D7：仅零配置模式合法；显式给定
+		// 即报错——沿用上方 --optimizer/--evo-variant 的显式性先例，文件
+		// 层值走下方成文提示不硬错）。
+		if explicit["spec-metrics"] {
+			errs = append(errs, errors.New("--spec-metrics only takes effect in the zero-config mode (the configured mode's metrics come from the task file)"))
 		}
 		for _, req := range []struct{ flag, val string }{
 			{"--task", o.taskPath}, {"--candidate", o.candidatePath}, {"--dataset", o.datasetPath},
@@ -1332,34 +1470,41 @@ func parseRunFlags(args []string) (runOptions, error) {
 	if o.budgetOptTokens < 0 {
 		errs = append(errs, fmt.Errorf("--budget-opt-tokens must be zero (unlimited) or positive, got %d", o.budgetOptTokens))
 	}
-	o.baseURL = config.BaseURL(o.baseURL)
+	o.baseURL = config.BaseURL(o.baseURL, cfg.BaseURL)
 	if o.baseURL == "" {
-		errs = append(errs, errors.New("--base-url (or PROMPTOPT_BASE_URL) is required"))
+		// D5 缺参指路（PRD-0001）：报错职责是一次性给全全部合法出路，
+		// 文案快照钉在 TestD5MissingParamGuidance。
+		errs = append(errs, errRunBaseURLRequired)
 	}
-	o.model = config.Model(o.model)
+	o.model = config.Model(o.model, cfg.Model)
 	if o.model == "" {
-		errs = append(errs, errors.New("--model (or PROMPTOPT_MODEL) is required"))
+		errs = append(errs, errRunModelRequired)
 	}
-	o.apiKey = config.APIKey(o.apiKey)
-	o.outDir = config.OutDir(o.outDir)
-	// Judge surface resolves flag > PROMPTOPT_JUDGE_* env; per-field
+	o.apiKey = config.APIKey(o.apiKey, cfg.APIKey)
+	o.outDir = config.OutDir(o.outDir, cfg.Out)
+	// Judge surface resolves flag > PROMPTOPT_JUDGE_* env > 文件; per-field
 	// fallback to the executor values happens later — inside
 	// eval.Engine for provider/model/tokens, at the dedicated-provider
 	// construction for base URL and API key. The parsed values stay
 	// "as configured" here so the manifest snapshot records exactly
 	// what the user set (nothing appears when nothing was set).
-	o.judgeProvider = config.JudgeProvider(o.judgeProvider)
-	o.judgeBaseURL = config.JudgeBaseURL(o.judgeBaseURL)
-	o.judgeModel = config.JudgeModel(o.judgeModel)
-	o.judgeAPIKey = config.JudgeAPIKey(o.judgeAPIKey)
-	o.judgeMaxTokens = config.JudgeMaxTokens(o.judgeMaxTokens)
+	o.judgeProvider = config.JudgeProvider(o.judgeProvider, cfg.JudgeProvider)
+	o.judgeBaseURL = config.JudgeBaseURL(o.judgeBaseURL, cfg.JudgeBaseURL)
+	o.judgeModel = config.JudgeModel(o.judgeModel, cfg.JudgeModel)
+	o.judgeAPIKey = config.JudgeAPIKey(o.judgeAPIKey, cfg.JudgeAPIKey)
+	// 显式性键（R1 #2）：显式 0 = 回落 --max-tokens / eval 默认，终判
+	// 压过文件层。
+	o.judgeMaxTokens = config.JudgeMaxTokens(o.judgeMaxTokens, explicit["judge-max-tokens"], cfg.JudgeMaxTokens)
 	// Decision surface (P7): only the connection fields carry an env
 	// fallback; the completeness check runs after the merge so an
-	// env-provided URL/model counts.
-	o.judgeDecisionURL = config.JudgeDecisionURL(o.judgeDecisionURL)
-	o.judgeDecisionModel = config.JudgeDecisionModel(o.judgeDecisionModel)
+	// env- or file-provided URL/model counts.
+	o.judgeDecisionURL = config.JudgeDecisionURL(o.judgeDecisionURL, cfg.JudgeDecisionURL)
+	o.judgeDecisionModel = config.JudgeDecisionModel(o.judgeDecisionModel, cfg.JudgeDecisionModel)
+	o.judgeDecisionConfidence = config.JudgeDecisionConfidence(o.judgeDecisionConfidence, explicit["judge-decision-confidence"], cfg.JudgeDecisionConfidence)
+	o.judgeDecisionDiagBelow = config.JudgeDecisionDiagBelow(o.judgeDecisionDiagBelow, explicit["judge-decision-diag-below"], cfg.JudgeDecisionDiagBelow)
 	if o.judgeBackend == eval.JudgeBackendDecision && (o.judgeDecisionURL == "" || o.judgeDecisionModel == "") {
-		errs = append(errs, errors.New("--judge-backend decision requires --judge-decision-url and --judge-decision-model (or their PROMPTOPT_JUDGE_DECISION_* env)"))
+		// config set 不拦跨键完整性，这里就是完整性报错的落点（D5/R1 #6）。
+		errs = append(errs, errRunDecisionRequired)
 	}
 	// Explicit --addr/--port implies the dashboard (equivalent to
 	// --web; a plain --web run is unchanged). Recorded even when other
@@ -1477,6 +1622,10 @@ type runManifest struct {
 	OptimizerRouteReason string `json:"optimizer_route_reason,omitempty"`
 	Provider             string `json:"provider,omitempty"`
 	EvoVariant           string `json:"evo_variant,omitempty"`
+	// SpecMetrics snapshots the --spec-metrics pin (D7, PRD-0001 切分 3):
+	// the metrics the synthesized spec was overridden to; omitted when
+	// the LLM chose them (empty pin). Zero-config mode only.
+	SpecMetrics []string `json:"spec_metrics,omitempty"`
 	// Outbound pacing and gateway-private extras (V7 §2.2): omitted
 	// entirely when unset so legacy manifests read unchanged.
 	// extra_body is also the run-level audit anchor for the flag (the

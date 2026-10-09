@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/ByronFinn/PromptOpt/internal/core"
@@ -71,7 +72,15 @@ type Pipeline struct {
 	// synthesizer calls, the probe engines and the baseline engine —
 	// the whole pipeline hits the same gateway, where a thinking mode
 	// burning the completion budget would stall synthesis first.
-	ExtraBody     map[string]any
+	ExtraBody map[string]any
+	// SpecMetrics pins the synthesized spec's metrics (--spec-metrics /
+	// 文件键 spec_metrics，PRD-0001 D7)：applied right after SynthesizeSpec
+	// and BEFORE sample synthesis, so buildSamplesPrompt marshals the
+	// overridden spec and the samples' expected answers are authored for
+	// the pinned metrics. A pinned list that drops the spec's original
+	// primary clears it (Task.Primary() falls back to Metrics[0], the
+	// first pinned item). Empty = the LLM chooses (the default menu).
+	SpecMetrics   []string
 	SamplesN      int
 	ProbeVariants int
 	Workers       int
@@ -106,6 +115,21 @@ func (p *Pipeline) Run(ctx context.Context) (core.RunResult, error) {
 	spec, err := synth.SynthesizeSpec(ctx, p.Prompt)
 	if err != nil {
 		return core.RunResult{}, err
+	}
+	// D7 覆盖点（PRD-0001 切分 3，钉死顺序）：SynthesizeSpec 之后、
+	// SynthesizeSamples/SaveSpec 之前——buildSamplesPrompt 整体 marshal
+	// spec，覆盖必须先于样本合成，expected 才按钉死指标出题；覆盖后立即
+	// Validate() 快速失败，非法指标绝不烧样本/探针合成预算。原 primary
+	// 不在钉死列表时置空交回落（Task.Primary() 取 Metrics[0]，即钉死
+	// 列表首项——不新增 --spec-primary 的设计裁决）。
+	if len(p.SpecMetrics) > 0 {
+		spec.Metrics = slices.Clone(p.SpecMetrics)
+		if !slices.Contains(spec.Metrics, spec.PrimaryMetric) {
+			spec.PrimaryMetric = ""
+		}
+		if err := spec.Validate(); err != nil {
+			return core.RunResult{}, fmt.Errorf("spec metrics override: %w", err)
+		}
 	}
 	samples, warnings, err := synth.SynthesizeSamples(ctx, spec, p.SamplesN)
 	if err != nil {

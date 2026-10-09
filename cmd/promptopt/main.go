@@ -58,6 +58,8 @@ func dispatch(args []string) int {
 		return rollbackCommand(rest)
 	case "anchor":
 		return anchorCommand(rest)
+	case "config":
+		return configCommand(rest)
 	case "mcp":
 		return mcpCommand(rest)
 	case "replay":
@@ -85,6 +87,7 @@ commands:
   rollback 回退采纳：回滚到上一不同采纳或 baseline，可 --emit 导出 candidate.yaml
   replay   回放 run 的完整调用与决策审计时间线（--headless 输出 JSONL）
   anchor   锚点库：add/list/promote 沉淀真实样本（anchors/<task-key>/，ADR 0001 治理）
+  config   配置文件层：init/list/get/set/unset（发现序 --config > PROMPTOPT_CONFIG > ./promptopt.yaml > 用户级；缺参报错指路）
   mcp      MCP stdio JSON-RPC server：optimize/verify/runs 三工具（单机单会话、无鉴权；stdout 只走 JSON-RPC）
   version  print version and commit
   help     show this help`)

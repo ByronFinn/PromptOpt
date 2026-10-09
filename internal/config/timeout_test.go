@@ -46,37 +46,57 @@ func TestParseTimeout(t *testing.T) {
 	}
 }
 
-// TestTimeoutPrecedence pins the resolution chain: flag > env > 0 (the
-// providers' DefaultTimeout). A malformed env value reads as unset —
-// the optional surface must not fail runs that never asked for it.
+// TestTimeoutPrecedence pins the resolution chain: flag > env > 文件 >
+// 0 (the providers' DefaultTimeout). A malformed env value reads as
+// unset — the optional surface must not fail runs that never asked for
+// it. The fileVal==0 rows double as the D2 byte-level parity layer
+// (old three-tier semantics per field).
 func TestTimeoutPrecedence(t *testing.T) {
 	t.Run("flag wins over env", func(t *testing.T) {
 		t.Setenv(EnvTimeout, "45")
-		if got := Timeout(30 * time.Second); got != 30*time.Second {
+		if got := Timeout(30*time.Second, 0); got != 30*time.Second {
 			t.Errorf("Timeout(30s) with env = %v, want 30s", got)
 		}
 	})
 	t.Run("env fills bare seconds", func(t *testing.T) {
 		t.Setenv(EnvTimeout, "45")
-		if got := Timeout(0); got != 45*time.Second {
+		if got := Timeout(0, 0); got != 45*time.Second {
 			t.Errorf("Timeout(0) with env 45 = %v, want 45s", got)
 		}
 	})
 	t.Run("env fills duration syntax", func(t *testing.T) {
 		t.Setenv(EnvTimeout, "2m")
-		if got := Timeout(0); got != 2*time.Minute {
+		if got := Timeout(0, 0); got != 2*time.Minute {
 			t.Errorf("Timeout(0) with env 2m = %v, want 2m", got)
 		}
 	})
-	t.Run("malformed env reads unset", func(t *testing.T) {
+	t.Run("file fills unset flag and env", func(t *testing.T) {
+		t.Setenv(EnvTimeout, "")
+		if got := Timeout(0, 25*time.Second); got != 25*time.Second {
+			t.Errorf("Timeout(0, 25s) = %v, want 25s", got)
+		}
+	})
+	t.Run("env beats file", func(t *testing.T) {
+		t.Setenv(EnvTimeout, "45")
+		if got := Timeout(0, 25*time.Second); got != 45*time.Second {
+			t.Errorf("Timeout(0, 25s) with env 45 = %v, want 45s", got)
+		}
+	})
+	t.Run("malformed env falls to file", func(t *testing.T) {
 		t.Setenv(EnvTimeout, "junk")
-		if got := Timeout(0); got != 0 {
+		if got := Timeout(0, 25*time.Second); got != 25*time.Second {
+			t.Errorf("Timeout(0, 25s) with junk env = %v, want 25s", got)
+		}
+	})
+	t.Run("malformed env reads unset without file", func(t *testing.T) {
+		t.Setenv(EnvTimeout, "junk")
+		if got := Timeout(0, 0); got != 0 {
 			t.Errorf("Timeout(0) with junk env = %v, want 0", got)
 		}
 	})
 	t.Run("all unset", func(t *testing.T) {
 		t.Setenv(EnvTimeout, "")
-		if got := Timeout(0); got != 0 {
+		if got := Timeout(0, 0); got != 0 {
 			t.Errorf("Timeout(0) unset = %v, want 0 (constructor default applies)", got)
 		}
 	})

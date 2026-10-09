@@ -85,85 +85,204 @@ const (
 	DefaultTimeout = 180 * time.Second
 )
 
-// resolve returns the first non-empty of flag value, environment
-// variable and fallback.
-func resolve(flagVal, envKey, fallback string) string {
-	return cmp.Or(flagVal, os.Getenv(envKey), fallback)
+// resolve is the merge kernel for the string keys whose flag default is
+// the empty string: flag > env > 文件 > 默认 (PRD-0001 D2 — the config
+// package owns the chain order; cmd layers never splice their own). A
+// zero fileVal degrades to the old three-tier semantics exactly
+// (TestResolverFileParity pins the per-field equality).
+func resolve(flagVal, envKey, fileVal, fallback string) string {
+	return cmp.Or(flagVal, os.Getenv(envKey), fileVal, fallback)
 }
 
 // BaseURL resolves the OpenAI-compatible API base URL. It has no
 // default: the run command must reject an empty value.
-func BaseURL(flagVal string) string {
-	return resolve(flagVal, EnvBaseURL, "")
+func BaseURL(flagVal, fileVal string) string {
+	return resolve(flagVal, EnvBaseURL, fileVal, "")
 }
 
 // Model resolves the model name. It has no default.
-func Model(flagVal string) string {
-	return resolve(flagVal, EnvModel, "")
+func Model(flagVal, fileVal string) string {
+	return resolve(flagVal, EnvModel, fileVal, "")
 }
 
 // APIKey resolves the API key, defaulting to "1" for local gateways.
-func APIKey(flagVal string) string {
-	return resolve(flagVal, EnvAPIKey, DefaultAPIKey)
+// The chain is flag > env > file > "1" — the key never persists in the
+// manifest, so the file tier is its only persistence.
+func APIKey(flagVal, fileVal string) string {
+	return resolve(flagVal, EnvAPIKey, fileVal, DefaultAPIKey)
 }
 
 // OutDir resolves the run output directory.
-func OutDir(flagVal string) string {
-	return resolve(flagVal, EnvOutDir, DefaultOutDir)
+func OutDir(flagVal, fileVal string) string {
+	return resolve(flagVal, EnvOutDir, fileVal, DefaultOutDir)
 }
 
 // JudgeProvider resolves the judge provider backend name; empty means
 // the judge reuses the executor provider (the engine-level fallback).
-func JudgeProvider(flagVal string) string {
-	return resolve(flagVal, EnvJudgeProvider, "")
+func JudgeProvider(flagVal, fileVal string) string {
+	return resolve(flagVal, EnvJudgeProvider, fileVal, "")
 }
 
 // JudgeModel resolves the judge model name; empty falls back to the
 // executor model inside eval.Engine.
-func JudgeModel(flagVal string) string {
-	return resolve(flagVal, EnvJudgeModel, "")
+func JudgeModel(flagVal, fileVal string) string {
+	return resolve(flagVal, EnvJudgeModel, fileVal, "")
 }
 
 // JudgeBaseURL resolves the judge API base URL; the call sites fall
 // back to the executor base URL when it stays empty (no default: the
 // judge shares whatever endpoint the executor resolves).
-func JudgeBaseURL(flagVal string) string {
-	return resolve(flagVal, EnvJudgeBaseURL, "")
+func JudgeBaseURL(flagVal, fileVal string) string {
+	return resolve(flagVal, EnvJudgeBaseURL, fileVal, "")
 }
 
 // JudgeAPIKey resolves the judge API key without a default: the call
-// sites fall back to the executor key chain (flag > PROMPTOPT_API_KEY
-// > "1"), so the judge never outlives the executor's credentials.
-func JudgeAPIKey(flagVal string) string {
-	return resolve(flagVal, EnvJudgeAPIKey, "")
+// sites fall back to the executor key chain (flag > env > file >
+// executor chain), so the judge never outlives the executor's
+// credentials.
+func JudgeAPIKey(flagVal, fileVal string) string {
+	return resolve(flagVal, EnvJudgeAPIKey, fileVal, "")
+}
+
+// JudgeDecisionURL resolves the decision-model service base URL (P7);
+// empty means no decision surface — --judge-backend decision then
+// fails as a usage error instead of guessing an endpoint.
+func JudgeDecisionURL(flagVal, fileVal string) string {
+	return resolve(flagVal, EnvJudgeDecisionURL, fileVal, "")
+}
+
+// JudgeDecisionModel resolves the decision model name (P7); the
+// /v1/systemone request body carries it, so the decision backend
+// requires it (empty = usage error under --judge-backend decision).
+func JudgeDecisionModel(flagVal, fileVal string) string {
+	return resolve(flagVal, EnvJudgeDecisionModel, fileVal, "")
+}
+
+// JudgeBackend resolves the llm_judge backend selector. It stays
+// flag/file only by design (no env — the backend is an explicit
+// opt-in, config.go:32-35 semantics); a non-empty flag value wins by
+// value, the file tier fills an unset flag.
+func JudgeBackend(flagVal, fileVal string) string {
+	return cmp.Or(flagVal, fileVal)
+}
+
+// Provider resolves the executor provider backend. It is an
+// explicitness key (D2 十键): an explicitly given flag — including its
+// default value — is terminal, so the file tier only fills an unset
+// flag; with no file this is byte-identical to the old flag-default
+// behavior.
+func Provider(flagVal string, flagSet bool, fileVal string) string {
+	if flagSet {
+		return flagVal
+	}
+	return cmp.Or(fileVal, DefaultProvider)
+}
+
+// Optimizer resolves the paradigm selection (zero-config mode). Like
+// Provider it is an explicitness key: the file tier only fills an
+// unset flag.
+func Optimizer(flagVal string, flagSet bool, fileVal string) string {
+	if flagSet {
+		return flagVal
+	}
+	return cmp.Or(fileVal, DefaultOptimizer)
+}
+
+// EvoVariant resolves the evoprompt variant; explicitness key, same
+// rule as Provider/Optimizer.
+func EvoVariant(flagVal string, flagSet bool, fileVal string) string {
+	if flagSet {
+		return flagVal
+	}
+	return cmp.Or(fileVal, DefaultEvoVariant)
+}
+
+// SpecMetrics resolves the zero-config synthesis metrics pin (D7，
+// PRD-0001 切分 3)：链 flag > env（无——键面设计如此）> 文件 > 默认
+// （空 = 现状 LLM 自选）。显式性键：显式给定的 flag——包括显式空列表
+// （「显式 LLM 自选」）——终判压过文件层。
+func SpecMetrics(flagVal []string, flagSet bool, fileVal []string) []string {
+	if flagSet {
+		return flagVal
+	}
+	return fileVal
+}
+
+// MaxTokens resolves the per-request completion budget. Explicitness
+// key: an explicit flag wins as-is, the file tier (a positive value)
+// fills an unset flag, and the default applies last.
+func MaxTokens(flagVal int, flagSet bool, fileVal int) int {
+	if flagSet {
+		return flagVal
+	}
+	if fileVal > 0 {
+		return fileVal
+	}
+	return DefaultMaxTokens
+}
+
+// RPS resolves the outbound pacing valve. Explicitness key: an
+// explicit --rps 0 ("off") is terminal and must not be overridden by
+// the file; the file tier fills an unset flag.
+func RPS(flagVal float64, flagSet bool, fileVal float64) float64 {
+	if flagSet {
+		return flagVal
+	}
+	return fileVal
+}
+
+// ExtraBody resolves the gateway-private extras. Explicitness key: an
+// explicit --extra-body "" ("explicitly off") is terminal; the file
+// tier fills an unset flag. Both sides are already-decoded maps.
+func ExtraBody(flagVal map[string]any, flagSet bool, fileVal map[string]any) map[string]any {
+	if flagSet {
+		return flagVal
+	}
+	return fileVal
 }
 
 // JudgeMaxTokens resolves the judge completion budget; 0 = unset (the
 // engine falls back to the executor budget). A malformed or
 // non-positive env value reads as unset: the judge surface is optional
 // by construction and must not fail runs it was never asked for.
-func JudgeMaxTokens(flagVal int) int {
-	if flagVal > 0 {
-		return flagVal
+// Explicitness key (R1 #2): an explicitly given flag — including an
+// explicit 0 ("reuse --max-tokens") — is terminal and beats both env
+// and file.
+func JudgeMaxTokens(flagVal int, flagSet bool, fileVal int) int {
+	if flagSet {
+		if flagVal > 0 {
+			return flagVal
+		}
+		return 0
 	}
 	if n, err := strconv.Atoi(os.Getenv(EnvJudgeMaxTokens)); err == nil && n > 0 {
 		return n
 	}
+	if fileVal > 0 {
+		return fileVal
+	}
 	return 0
 }
 
-// JudgeDecisionURL resolves the decision-model service base URL (P7);
-// empty means no decision surface — --judge-backend decision then
-// fails as a usage error instead of guessing an endpoint.
-func JudgeDecisionURL(flagVal string) string {
-	return resolve(flagVal, EnvJudgeDecisionURL, "")
+// JudgeDecisionConfidence resolves the decision cascade confidence
+// threshold; 0 = the eval-package default (0.5). Explicitness key
+// (R1 #2): an explicit flag 0 means "use the eval default" and must
+// not be overridden by the file tier.
+func JudgeDecisionConfidence(flagVal float64, flagSet bool, fileVal float64) float64 {
+	if flagSet {
+		return flagVal
+	}
+	return fileVal
 }
 
-// JudgeDecisionModel resolves the decision model name (P7); the
-// /v1/systemone request body carries it, so the decision backend
-// requires it (empty = usage error under --judge-backend decision).
-func JudgeDecisionModel(flagVal string) string {
-	return resolve(flagVal, EnvJudgeDecisionModel, "")
+// JudgeDecisionDiagBelow resolves the decision cascade diagnosis line;
+// 0 = the eval-package default (0.6). Explicitness key, same rule as
+// JudgeDecisionConfidence.
+func JudgeDecisionDiagBelow(flagVal float64, flagSet bool, fileVal float64) float64 {
+	if flagSet {
+		return flagVal
+	}
+	return fileVal
 }
 
 // ParseTimeout reads one per-attempt timeout value: Go duration syntax
@@ -193,17 +312,19 @@ func ParseTimeout(s string) (time.Duration, error) {
 }
 
 // Timeout resolves the per-attempt provider deadline: flag > env
-// (PROMPTOPT_TIMEOUT) > 0 (the caller's "unset", resolved to
+// (PROMPTOPT_TIMEOUT) > 文件 > 0 (the caller's "unset", resolved to
 // DefaultTimeout inside the provider constructors). A malformed env
 // value reads as unset, mirroring JudgeMaxTokens: the surface is
 // optional and must not fail runs that never asked for it — the flag
-// side (ParseTimeout) is the strict one.
-func Timeout(flagVal time.Duration) time.Duration {
+// side (ParseTimeout) and the file side (validated at the merge site)
+// are the strict ones. fileVal is the merge site's already-parsed file
+// timeout (0 when the key is absent).
+func Timeout(flagVal, fileVal time.Duration) time.Duration {
 	if flagVal > 0 {
 		return flagVal
 	}
-	if d, err := ParseTimeout(os.Getenv(EnvTimeout)); err == nil {
+	if d, err := ParseTimeout(os.Getenv(EnvTimeout)); err == nil && d > 0 {
 		return d
 	}
-	return 0
+	return fileVal
 }

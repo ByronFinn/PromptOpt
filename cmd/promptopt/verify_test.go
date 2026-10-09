@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ByronFinn/PromptOpt/internal/config"
 	"github.com/ByronFinn/PromptOpt/internal/core"
 	"github.com/ByronFinn/PromptOpt/internal/engine"
 	"github.com/ByronFinn/PromptOpt/internal/eval"
@@ -645,5 +647,204 @@ func TestVerifyUsageErrors(t *testing.T) {
 		if code, _ := verifyCli(t, tc.args...); code != exitFailure {
 			t.Errorf("%s: exit = %d, want 1", tc.name, code)
 		}
+	}
+}
+
+// --- 配置文件层：verify 连接身份白名单补位（PRD-0001 R2 #1）------------------
+
+// clearVerifyConnEnv 清空 resolveVerifyConn 读取的全部 env（单元层隔离，
+// 不动工作目录）。
+func clearVerifyConnEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		config.EnvBaseURL, config.EnvModel, config.EnvAPIKey, config.EnvTimeout,
+		config.EnvJudgeProvider, config.EnvJudgeModel, config.EnvJudgeBaseURL,
+		config.EnvJudgeAPIKey, config.EnvJudgeMaxTokens,
+		config.EnvJudgeDecisionURL, config.EnvJudgeDecisionModel,
+	} {
+		t.Setenv(k, "")
+	}
+}
+
+// verifyFileFixture 携带全部 11 个白名单键与全部 6 个行为键——白名单键
+// 应补位，行为键必须原样不动。
+func verifyFileFixture() *config.File {
+	return &config.File{
+		Provider: "anthropic", BaseURL: "http://file/v1", Model: "file-m",
+		APIKey: "file-key", Timeout: "45",
+		JudgeProvider: "openai", JudgeBaseURL: "http://jfile/v1", JudgeModel: "jfile-m",
+		JudgeAPIKey: "jfile-key", JudgeDecisionURL: "http://dfile", JudgeDecisionModel: "dfile-m",
+		// 行为键（文件有值，但 verify 一律不从 file 取值）：
+		RPS: 2.5, JudgeMaxTokens: 512, JudgeBackend: "decision",
+		JudgeDecisionConfidence: 0.7, JudgeDecisionDiagBelow: 0.8,
+		ExtraBody: map[string]any{"chat_template_kwargs": map[string]any{"enable_thinking": false}},
+	}
+}
+
+// TestResolveVerifyConnWhitelistBackfill pins the R2 #1 contract at the
+// unit layer: the 11 connection-identity keys backfill empty/omitempty
+// manifest slots from the file (old artifacts stay runnable on machines
+// without env), the manifest tier beats the file, env beats the file,
+// and the 6 behavior keys are NEVER taken from the file — backfilling
+// them would certify a scenario the run never executed.
+func TestResolveVerifyConnWhitelistBackfill(t *testing.T) {
+	f := verifyFileFixture()
+
+	t.Run("empty manifest backfills the 11 whitelist keys only", func(t *testing.T) {
+		clearVerifyConnEnv(t)
+		o, err := resolveVerifyConn(verifyOptions{cfgFile: f}, runManifest{})
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		checks := []struct {
+			name string
+			got  any
+			want any
+		}{
+			{"provider", o.providerName, "anthropic"},
+			{"base_url", o.baseURL, "http://file/v1"},
+			{"model", o.model, "file-m"},
+			{"api_key", o.apiKey, "file-key"},
+			{"timeout", o.timeout, 45 * time.Second},
+			{"judge_provider", o.judgeProvider, "openai"},
+			{"judge_base_url", o.judgeBaseURL, "http://jfile/v1"},
+			{"judge_model", o.judgeModel, "jfile-m"},
+			{"judge_api_key", o.judgeAPIKey, "jfile-key"},
+			{"judge_decision_url", o.judgeDecisionURL, "http://dfile"},
+			{"judge_decision_model", o.judgeDecisionModel, "dfile-m"},
+		}
+		for _, c := range checks {
+			if c.got != c.want {
+				t.Errorf("%s = %v, want %v (whitelist backfill)", c.name, c.got, c.want)
+			}
+		}
+		// 行为键：manifest omitempty 缺失无法区分「run 显式 0」与「run
+		// 未给」——文件值一概不补位。
+		if o.rps != 0 {
+			t.Errorf("rps = %v, want 0 (behavior key never backfilled)", o.rps)
+		}
+		if o.extraBody != nil {
+			t.Errorf("extra_body = %v, want nil (behavior key never backfilled)", o.extraBody)
+		}
+		if o.judgeMaxTokens != 0 {
+			t.Errorf("judge_max_tokens = %d, want 0 (behavior key never backfilled)", o.judgeMaxTokens)
+		}
+		if o.judgeBackend != "" {
+			t.Errorf("judge_backend = %q, want empty (behavior key never backfilled)", o.judgeBackend)
+		}
+		if o.judgeDecisionConfidence != 0 || o.judgeDecisionDiagBelow != 0 {
+			t.Errorf("thresholds = %v/%v, want 0/0 (behavior keys never backfilled)",
+				o.judgeDecisionConfidence, o.judgeDecisionDiagBelow)
+		}
+	})
+
+	t.Run("manifest beats file for whitelist keys", func(t *testing.T) {
+		clearVerifyConnEnv(t)
+		mf := runManifest{
+			Provider: "openai", BaseURL: "http://mf/v1", Model: "mf-m",
+			TimeoutSeconds: 300,
+			JudgeProvider:  "anthropic", JudgeBaseURL: "http://jmf/v1", JudgeModel: "jmf-m",
+			JudgeDecisionURL: "http://dmf", JudgeDecisionModel: "dmf-m",
+		}
+		o, err := resolveVerifyConn(verifyOptions{cfgFile: f}, mf)
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if o.providerName != "openai" || o.baseURL != "http://mf/v1" || o.model != "mf-m" ||
+			o.timeout != 300*time.Second || o.judgeProvider != "anthropic" ||
+			o.judgeBaseURL != "http://jmf/v1" || o.judgeModel != "jmf-m" ||
+			o.judgeDecisionURL != "http://dmf" || o.judgeDecisionModel != "dmf-m" {
+			t.Errorf("manifest tier must beat the file tier: %+v", o)
+		}
+	})
+
+	t.Run("env beats file", func(t *testing.T) {
+		clearVerifyConnEnv(t)
+		t.Setenv(config.EnvBaseURL, "http://env/v1")
+		t.Setenv(config.EnvAPIKey, "env-key")
+		o, err := resolveVerifyConn(verifyOptions{cfgFile: f}, runManifest{})
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if o.baseURL != "http://env/v1" || o.apiKey != "env-key" {
+			t.Errorf("env = %s/%s, want the env values", o.baseURL, o.apiKey)
+		}
+	})
+
+	t.Run("api key chain flag > env > file > 1", func(t *testing.T) {
+		clearVerifyConnEnv(t)
+		// 连接必填项由 manifest 供给，让解析走到 api_key 行。
+		mf := runManifest{BaseURL: "http://mf/v1", Model: "mf-m"}
+		if o, _ := resolveVerifyConn(verifyOptions{cfgFile: nil}, mf); o.apiKey != "1" {
+			t.Errorf("no file no env: api_key = %q, want the default 1", o.apiKey)
+		}
+		if o, _ := resolveVerifyConn(verifyOptions{apiKey: "flag-key", cfgFile: f}, mf); o.apiKey != "flag-key" {
+			t.Errorf("flag api_key = %q, want flag-key", o.apiKey)
+		}
+	})
+
+	t.Run("no file leaves the legacy chain untouched", func(t *testing.T) {
+		clearVerifyConnEnv(t)
+		o, err := resolveVerifyConn(verifyOptions{}, runManifest{BaseURL: "http://mf/v1", Model: "mf-m"})
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if o.baseURL != "http://mf/v1" || o.model != "mf-m" || o.providerName != "openai" {
+			t.Errorf("legacy chain drifted: %+v", o)
+		}
+	})
+}
+
+// TestVerifyFileExtraBodyStaysOffWire is the R2 #1 wire-payload 切口:
+// the run manifest carries no extra_body, the file does — every verify
+// request (holdout synthesis, baseline and delivered evaluation) must
+// go out WITHOUT the gateway-private parameter. Backfilling it would
+// have verify certify a scenario the run never executed.
+func TestVerifyFileExtraBodyStaysOffWire(t *testing.T) {
+	isolateRunConfigEnv(t)
+	runsDir, runID := zeroConfigRunTree(t)
+	adoptForVerify(t, runsDir, runID, "hand-bad", verifyBadMarker+" 文本：{input}")
+	// 文件在 run 之后落盘：manifest 无 extra_body，文件有。
+	writeRunFile(t, config.ProjectFileName, `extra_body:
+  chat_template_kwargs:
+    enable_thinking: false
+`, 0o600)
+
+	var violations, requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		requests.Add(1)
+		if strings.Contains(string(b), "chat_template_kwargs") {
+			violations.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		content := "无法辨证"
+		switch {
+		case strings.Contains(string(b), harness.MarkerSamples):
+			content = zcSamples
+		case strings.Contains(string(b), verifyBadMarker):
+			content = "坏输出不是证候"
+		default:
+			for _, sc := range zcScript {
+				if strings.Contains(string(b), sc.input) {
+					content = sc.expected
+					break
+				}
+			}
+		}
+		fmt.Fprintf(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%q}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`, content)
+	}))
+	t.Cleanup(srv.Close)
+
+	code, out := verifyCli(t, runID, "--runs-dir", runsDir,
+		"--base-url", srv.URL, "--model", "fake-model", "--headless")
+	if code != exitRegression {
+		t.Fatalf("exit = %d, want 3 (regression flow must actually run)\n%s", code, out)
+	}
+	if requests.Load() == 0 {
+		t.Fatal("no requests reached the stub — the wire assertion is vacuous")
+	}
+	if violations.Load() != 0 {
+		t.Errorf("%d of %d requests carried the file extra_body — verify 补位泄漏", violations.Load(), requests.Load())
 	}
 }

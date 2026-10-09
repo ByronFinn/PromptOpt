@@ -8,6 +8,20 @@ v1（Python）时代的代码归档于 tag `v0.1-python`，不在本日志追溯
 
 ### Added
 
+#### V7 证据主干、生态面与配置面
+
+> 本节补账 V7 已落地但未及时记账的文档债（此前 `grep -c "V7" CHANGELOG.md = 0`）。
+
+- 裁判隔离与决策级联：`--judge-provider/--judge-base-url/--judge-model/--judge-api-key/--judge-max-tokens`（env `PROMPTOPT_JUDGE_*`，run/verify 同链）为 llm_judge 提供独立裁判 LLM 配置面，未配置逐字段回落执行器；`--judge-backend decision` 把 llm_judge 样本改出 SystemOne 决策服务（score 概率加权 + confidence/低分两级联回落生成式裁判），`--judge-decision-url/--judge-decision-model` 连接面与两阈值 flag，manifest 快照五字段供 verify 复现同一裁判口径。
+- 统计显著性三层收编：`--temperature/--reps` 多次采样与预算语义（rep_scores 落 trace）；verify 配对自助法 CI 三态门禁（退出码契约不动）；前沿噪声感知支配 + ε-clone。
+- Provider 出站面：`--extra-body` 网关私有 JSON 字段透传、`--rps` 令牌桶限速（与 429/5xx 退避叠加）、`--timeout` 三客户端统一 per-attempt deadline（显式值入 manifest 供 verify 复现）。
+- 评估指标注册表：确定性指标 `RegisterMetric` 一行接入（`llm_judge` 保留名禁注册）+ 内置中医分维度指标包 `tcm_f1_syndrome/treatment/formula/herb` 与宏平均 `tcm_f1_entity`；`--optimizer auto` 紧预算路由 p¹ 与 TightBudget 语义修正。
+- `anchor` 子命令与 `--task-key`：锚点库 `anchors/<task-key>/` confirmed/staging 双层、input_hash 去重、promote 人工确认（ADR 0001 治理机制化）；verify `--anchor-lib` 加载正式库、`--promote` 逐样本 verdict 回流 staging。
+- 跨 run 候选池与退化预警：`pool/<task-key>/pool.jsonl` 追加制，同集（ID + input_hash 双一致）配对自助法对照，下界超阈值 stderr 中文预警 + manifest `pool_warning`。
+- `mcp` 子命令：MCP 单机 API 面——stdio JSON-RPC 三工具 optimize/verify/runs（协议取舍见 docs/mcp.md）。
+- Web 看板四视图 1:1 重构（`/runs/{id}/dashboard` + 五数据端点）、`--addr`/`--port` 分立参数（显式任一即隐含起看板）、run 结束中文结论块、SSE 实时事件流。
+- **配置面（[PRD-0001](docs/prd/PRD-0001-config-guidance.md)）**：YAML 配置文件层——`--config`/`PROMPTOPT_CONFIG` 四层发现序、22 环境身份键、单一解析链（run/mcp：flag > env > 文件 > 默认；verify 连接身份白名单补位、行为键不补位）、10 键显式性标记（显式 flag 含显式 0 终判压过文件）；`promptopt config` 子命令——init 九问向导（非 tty 行协议、stdin `-` 密钥前置读取、非 tty 无 `--force` 拒绝覆盖）/list 逐键来源与遮蔽可见性（人类 stderr、`--headless` JSON stdout）/get/set（仅单键校验、`-` 整读 stdin）/unset（幂等）；写侧安全闸（0600/0700、api_key 恒掩码、project 作用域幂等追加 .gitignore、宽松权限位运算告警）；run/verify 缺 base_url/model 报错升级为三/四途径指路、decision 缺参加 config 键指引（退出码 1）。
+
 #### V6 工程化与回归门禁
 
 - `promptopt verify`：交付候选的最终验证命令。锚点验证集优先（`--anchor`，≥3 条真实样本，仅用于最终验证、永不进入优化循环），未提供锚点时按原 run spec 独立重合成同契约保留集对照，报告强制标注「结论未经真实数据验证」（ADR 0001）。
