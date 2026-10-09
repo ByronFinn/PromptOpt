@@ -98,20 +98,28 @@ jobs:
           code=$?
           set -e
           # 指标对照表写入 step summary（无论成败，PR 上直接可看）。
+          # 统计判定列取 regression.ci.verdict（配对自助法：regressed /
+          # confident_pass / inconclusive）；inconclusive = 差异未超噪声
+          # 区间、样本量不足，退出码虽为 0 但不构成回归背书，表头下方
+          # 强制标注。
           jq -r '. as $r
             | (($r.baseline.metric_means // {}) + ($r.delivered.metric_means // {}) | keys | sort) as $ms
             | "## PR 优化对比（run `\($r.run_id)`）\n\n"
               + (if $r.caveat then "> ⚠️ 验证集为同 spec 合成保留集：结论未经真实数据验证（见 docs/release.md）\n\n" else "" end)
+              + (if $r.regression.ci and $r.regression.ci.verdict == "inconclusive"
+                 then "> ⚠️ 差异未超噪声区间，样本量不足（n=\(($r.baseline.rows // []) | length)、k=\($r.baseline.reps // 1)、B=\($r.regression.ci.b)、CI=[\($r.regression.ci.lo), \($r.regression.ci.hi)]）——结论按不可判定处理\n\n"
+                 else "" end)
               + "- 验证模式：\($r.mode)　主指标：\($r.primary)　退出码：\($r.exit_code)（3=回归/约束违反，2=证据不完整）\n\n"
-              + "| 指标 | baseline（\($r.baseline.candidate_id)） | delivered（\($r.delivered.candidate_id)） | Δ |\n"
-              + "|---|---|---|---|\n"
+              + "| 指标 | baseline（\($r.baseline.candidate_id)） | delivered（\($r.delivered.candidate_id)） | Δ | 统计判定 |\n"
+              + "|---|---|---|---|---|\n"
               + ([$ms[] as $m
                   | ($r.baseline.metric_means[$m]) as $b
                   | ($r.delivered.metric_means[$m]) as $d
                   | "| \($m)\(if $m == $r.primary then "（主）" else "" end)"
                     + "| \(if $b == null then "—" else ($b * 10000 | round / 10000) end)"
                     + "| \(if $d == null then "—" else ($d * 10000 | round / 10000) end)"
-                    + "| \(if ($b == null or $d == null) then "—" else (($d - $b) * 10000 | round / 10000) end) |"]
+                    + "| \(if ($b == null or $d == null) then "—" else (($d - $b) * 10000 | round / 10000) end)"
+                    + "| \(if $m == $r.primary and $r.regression.ci then "CI \($r.regression.ci.verdict)（B=\($r.regression.ci.b)）" else "—" end) |"]
                 | join("\n"))' verify-report.json >> "$GITHUB_STEP_SUMMARY" || true
           cat verify-report.json 2>/dev/null || true
           exit "$code"

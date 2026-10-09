@@ -8,13 +8,16 @@ import (
 )
 
 // Role identifies which pipeline participant consumed tokens.
-// Only the executor role spends tokens in the current slice; the
-// optimizer role is reserved for GEPA reflection calls.
+// Executor is the candidate evaluation path, optimizer is reserved for
+// reflection/mutation calls, and judge is the llm_judge metric's
+// grading call — metered separately in UsageByRole while still arming
+// the executor token soft stop (total evaluation cost stays one valve).
 type Role string
 
 const (
 	RoleExecutor  Role = "executor"
 	RoleOptimizer Role = "optimizer"
+	RoleJudge     Role = "judge"
 )
 
 // Usage reports token consumption for one LLM call.
@@ -99,17 +102,25 @@ type RunResult struct {
 // serialized to samples/<id>.json. Usage is the sample's total
 // evaluation spend — the executor call plus the judge call when the
 // llm_judge metric is declared; DurationMS stays the executor call
-// alone and JudgeMS, when set, is the judge call's latency.
+// alone and JudgeMS, when set, is the judge call's latency. With
+// multi-rep sampling (Reps > 1) Scores are per-metric means over the
+// reps, ScoresSD the per-metric in-sample standard deviation and
+// RepScores the per-rep per-metric scores in rep order (the per-rep
+// bar data behind the dashboard's rep strip); artifacts written before
+// Reps existed read as reps=1.
 type SampleTrace struct {
-	SampleID   string             `json:"sample_id"`
-	Role       Role               `json:"role"`
-	Prompt     string             `json:"prompt"`
-	Response   string             `json:"response"`
-	Reasoning  string             `json:"reasoning,omitempty"`
-	Scores     map[string]float64 `json:"scores,omitempty"`
-	Diagnosis  map[string]string  `json:"diagnosis,omitempty"`
-	Error      string             `json:"error,omitempty"`
-	Usage      Usage              `json:"usage"`
-	DurationMS int64              `json:"duration_ms"`
-	JudgeMS    int64              `json:"judge_ms,omitempty"`
+	SampleID   string               `json:"sample_id"`
+	Role       Role                 `json:"role"`
+	Prompt     string               `json:"prompt"`
+	Response   string               `json:"response"`
+	Reasoning  string               `json:"reasoning,omitempty"`
+	Scores     map[string]float64   `json:"scores,omitempty"`
+	ScoresSD   map[string]float64   `json:"scores_sd,omitempty"`
+	RepScores  []map[string]float64 `json:"rep_scores,omitempty"`
+	Reps       int                  `json:"reps,omitempty"`
+	Diagnosis  map[string]string    `json:"diagnosis,omitempty"`
+	Error      string               `json:"error,omitempty"`
+	Usage      Usage                `json:"usage"`
+	DurationMS int64                `json:"duration_ms"`
+	JudgeMS    int64                `json:"judge_ms,omitempty"`
 }

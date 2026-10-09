@@ -297,7 +297,7 @@ func (v *comparePageView) buildMetricRows() {
 
 // buildUsageRows compares per-role token totals.
 func (v *comparePageView) buildUsageRows() {
-	for _, role := range []core.Role{core.RoleExecutor, core.RoleOptimizer} {
+	for _, role := range []core.Role{core.RoleExecutor, core.RoleJudge, core.RoleOptimizer} {
 		ua, okA := v.SideA.Usage[role]
 		ub, okB := v.SideB.Usage[role]
 		if !okA && !okB {

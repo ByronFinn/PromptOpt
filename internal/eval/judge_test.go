@@ -95,6 +95,7 @@ type judgeEngineOpts struct {
 	workers      int
 	metrics      []string // defaults to [llm_judge]
 	budgetTokens int64
+	temperature  float64 // executor-side temperature; the judge must stay at 0 regardless
 	respond      func(int, string) (int, string) // defaults to a 0.75 verdict
 }
 
@@ -126,7 +127,8 @@ func runJudgeEngine(t *testing.T, o judgeEngineOpts, samples []core.Sample) (cor
 		RunID: "judge-run", RunDir: dir, Model: "fake-model", MaxTokens: 64,
 		Workers: max(o.workers, 1), Metrics: metrics,
 		Budget: NewBudget(o.budgetTokens, 0), Provider: client,
-		TaskName: "task", CandidateID: "cand", DatasetName: "ds",
+		Temperature: o.temperature,
+		TaskName:    "task", CandidateID: "cand", DatasetName: "ds",
 		OnEvent: func(ev Event) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -174,10 +176,14 @@ func TestEngineLLMJudgeScoresWithChineseDiagnosis(t *testing.T) {
 	if res.MetricMeans[MetricLLMJudge] != 0.75 {
 		t.Errorf("llm_judge mean = %v, want 0.75", res.MetricMeans[MetricLLMJudge])
 	}
-	// Budget snapshot: the judge's usage is metered under the executor
-	// role alongside the executor call's.
-	if u := res.UsageByRole[core.RoleExecutor]; u.PromptTokens != 17 || u.CompletionTokens != 8 {
-		t.Errorf("executor usage = %+v, want 17/8 (executor 10/5 + judge 7/3)", u)
+	// Budget snapshot: the judge's usage is metered under its own
+	// RoleJudge key (visible separately), while the sample-level totals
+	// below keep merging executor+judge.
+	if u := res.UsageByRole[core.RoleExecutor]; u.PromptTokens != 10 || u.CompletionTokens != 5 {
+		t.Errorf("executor usage = %+v, want 10/5", u)
+	}
+	if u := res.UsageByRole[core.RoleJudge]; u.PromptTokens != 7 || u.CompletionTokens != 3 {
+		t.Errorf("judge usage = %+v, want 7/3 under RoleJudge", u)
 	}
 
 	// ASI chain: the Chinese diagnosis rides the sample_done event.
@@ -221,7 +227,7 @@ func TestEngineLLMJudgeScoresWithChineseDiagnosis(t *testing.T) {
 	if execTrace.Stage != "" {
 		t.Errorf("executor trace stage = %q, want unset", execTrace.Stage)
 	}
-	if judgeTrace.Role != core.RoleExecutor || judgeTrace.SampleID != "s-00" {
+	if judgeTrace.Role != core.RoleJudge || judgeTrace.SampleID != "s-00" {
 		t.Errorf("judge trace header = %+v", judgeTrace)
 	}
 	judgePromptSent := judgeTrace.Request.Messages[0].Content
@@ -275,8 +281,11 @@ func TestEngineMixedMetricsWithJudge(t *testing.T) {
 	if len(bodies) != 4 {
 		t.Errorf("llm calls = %d, want 4 (2 executor + 2 judge)", len(bodies))
 	}
-	if u := res.UsageByRole[core.RoleExecutor]; u.PromptTokens != 34 || u.CompletionTokens != 16 {
-		t.Errorf("executor usage = %+v, want 34/16 (2×17/8)", u)
+	if u := res.UsageByRole[core.RoleExecutor]; u.PromptTokens != 20 || u.CompletionTokens != 10 {
+		t.Errorf("executor usage = %+v, want 20/10 (2×10/5)", u)
+	}
+	if u := res.UsageByRole[core.RoleJudge]; u.PromptTokens != 14 || u.CompletionTokens != 6 {
+		t.Errorf("judge usage = %+v, want 14/6 (2×7/3) under RoleJudge", u)
 	}
 }
 
@@ -301,9 +310,13 @@ func TestEngineLLMJudgeBadVerdictFailsSample(t *testing.T) {
 	if len(res.MetricMeans) != 0 {
 		t.Errorf("means = %+v, want none (failed samples never score)", res.MetricMeans)
 	}
-	// Tokens were spent either way: judge usage still counts.
-	if u := res.UsageByRole[core.RoleExecutor]; u.PromptTokens != 17 || u.CompletionTokens != 8 {
-		t.Errorf("executor usage = %+v, want 17/8 including the unusable judge call", u)
+	// Tokens were spent either way: judge usage still counts, under its
+	// own role key.
+	if u := res.UsageByRole[core.RoleExecutor]; u.PromptTokens != 10 || u.CompletionTokens != 5 {
+		t.Errorf("executor usage = %+v, want 10/5", u)
+	}
+	if u := res.UsageByRole[core.RoleJudge]; u.PromptTokens != 7 || u.CompletionTokens != 3 {
+		t.Errorf("judge usage = %+v, want 7/3 including the unusable judge call", u)
 	}
 	for _, ev := range events {
 		if ev.Type == EventSampleDone {
@@ -357,12 +370,16 @@ func TestEngineLLMJudgeProviderFailureFailsSample(t *testing.T) {
 	}
 }
 
+// TestEngineLLMJudgeUsageArmsExecutorSoftStop pins the budget decision
+// of the judge isolation (roadmap-v7 §2.1): judge usage is metered
+// under its own RoleJudge key, and that key arms the same token soft
+// stop the executor historically shared — total evaluation cost stays
+// one valve. Sample 0 spends 60(exec)+60(judge)=120 over the 100-token
+// limit, sample 1 was already handed off (the post-hoc soft-stop
+// semantics of the dispatch loop), sample 2 stays undispatched: exit
+// code 2 semantics unchanged.
 func TestEngineLLMJudgeUsageArmsExecutorSoftStop(t *testing.T) {
-	// Judge usage is metered under the executor role, so executor+judge
-	// together arm the token soft stop: sample 0 spends 60+60=120 over
-	// the 100-token limit, sample 1 was already handed off (the
-	// post-hoc soft-stop semantics of the dispatch loop), sample 2
-	// stays undispatched.
+	// Judge usage is metered under its own role key...
 	res, bodies, events, _ := runJudgeEngine(t, judgeEngineOpts{
 		workers:      1,
 		budgetTokens: 100,
@@ -385,8 +402,11 @@ func TestEngineLLMJudgeUsageArmsExecutorSoftStop(t *testing.T) {
 	if len(bodies) != 4 {
 		t.Errorf("llm calls = %d, want 4 (2 samples × executor+judge)", len(bodies))
 	}
-	if u := res.UsageByRole[core.RoleExecutor]; u.PromptTokens != 240 {
-		t.Errorf("executor usage = %+v, want 240 (2×(60+60))", u)
+	if u := res.UsageByRole[core.RoleExecutor]; u.PromptTokens != 120 {
+		t.Errorf("executor usage = %+v, want 120 (2×60)", u)
+	}
+	if u := res.UsageByRole[core.RoleJudge]; u.PromptTokens != 120 {
+		t.Errorf("judge usage = %+v, want 120 (2×60) under RoleJudge", u)
 	}
 	sawBudgetStop := false
 	for _, ev := range events {
@@ -396,6 +416,32 @@ func TestEngineLLMJudgeUsageArmsExecutorSoftStop(t *testing.T) {
 	}
 	if !sawBudgetStop {
 		t.Error("budget_stop event missing (judge spend must arm the soft stop)")
+	}
+}
+
+// TestJudgeRequestTemperatureStaysZero（用例 ⑦）pins judge.go:88: the
+// judge request keeps its hardcoded deterministic 0 even when the
+// executor samples hot — the executor's temperature never leaks into
+// the judge call, so the judge's request body carries no temperature
+// field at all (0 is omitempty-ed off the wire).
+func TestJudgeRequestTemperatureStaysZero(t *testing.T) {
+	_, bodies, _, _ := runJudgeEngine(t, judgeEngineOpts{temperature: 0.9}, testSamples(1))
+	judgeCalls, execCalls := 0, 0
+	for _, b := range bodies {
+		if strings.Contains(b, "评估裁判") {
+			judgeCalls++
+			if strings.Contains(b, "temperature") {
+				t.Errorf("judge request carries a temperature field: %.200s", b)
+			}
+			continue
+		}
+		execCalls++
+		if !strings.Contains(b, `"temperature":0.9`) {
+			t.Errorf("executor request lost the hot temperature: %.200s", b)
+		}
+	}
+	if judgeCalls != 1 || execCalls != 1 {
+		t.Fatalf("calls = %d judge / %d executor, want 1/1", judgeCalls, execCalls)
 	}
 }
 

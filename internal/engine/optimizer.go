@@ -84,11 +84,14 @@ func (p Params) Validate() error {
 
 // SampleRecord is one sample's evidence from a candidate evaluation:
 // response, per-metric scores and the ASI diagnosis that feeds the
-// reflection context.
+// reflection context. ScoresSD carries the per-metric in-sample
+// standard deviation over the sample's reps (nil for single-shot
+// evidence); it feeds the frontier's noise-aware ε margins.
 type SampleRecord struct {
 	Sample    core.Sample        `json:"sample"`
 	Response  string             `json:"response"`
 	Scores    map[string]float64 `json:"scores,omitempty"`
+	ScoresSD  map[string]float64 `json:"scores_sd,omitempty"`
 	Diagnosis map[string]string  `json:"diagnosis,omitempty"`
 }
 
@@ -112,6 +115,39 @@ type Request struct {
 	OptMaxTokens int
 	Workers      int
 
+	// Judge coverage for the llm_judge metric: an optional second LLM
+	// forwarded to every unit eval engine. Zero values fall back to the
+	// executor's Provider/Model/MaxTokens per field inside eval.Engine.
+	JudgeProvider  provider.Provider
+	JudgeModel     string
+	JudgeMaxTokens int
+	// JudgeBackend/DecisionClient forward the decision-model judge
+	// cascade to every unit eval engine — the same single-judge-per-run
+	// rule as the generative surface above: baseline, verify and the
+	// optimization loop must grade through one surface (research 0001
+	// §3.2). Thresholds forward with them; 0 = the eval-package
+	// defaults. DecisionLevels stays unset through the CLI (the default
+	// 4-level rubric applies).
+	JudgeBackend            string
+	DecisionClient          *provider.SystemOneClient
+	JudgeDecisionConfidence float64
+	JudgeDecisionDiagBelow  float64
+
+	// ExtraBody carries gateway-private JSON fields (e.g.
+	// chat_template_kwargs to disable thinking) forwarded to every
+	// evaluation engine's executor requests and to the optimizer-side
+	// Advisor dials — both hit the same gateway/model, where a thinking
+	// mode burning the completion budget is exactly the problem the
+	// flag solves. Judge calls stay excluded (see eval.Engine).
+	ExtraBody map[string]any
+
+	// Temperature and Reps are the executor's statistical knobs,
+	// forwarded to every unit eval engine and folded into the baseline
+	// row's provenance: Reps > 1 makes every frontier row a k-rep mean
+	// and arms the noise-aware admission margins (Member.SD).
+	Temperature float64
+	Reps        int
+
 	// Budget is the shared dispatch budget: executor-role usage arms
 	// the soft stop, optimizer-role usage only feeds the valve below.
 	Budget *eval.Budget
@@ -119,9 +155,17 @@ type Request struct {
 	// (synthesis included); 0 = unlimited.
 	OptBudgetTokens int64
 
-	RunID   string
-	RunDir  string // runs/<id>/; artifacts land beside the baseline run
-	OnEvent func(eval.Event)
+	RunID  string
+	RunDir string // runs/<id>/; artifacts land beside the baseline run
+	// SynthDir is the synthesis artifact root (synth/<id>/) for runs
+	// that came through the harness pipeline. The p1 paradigm reads
+	// the probe variance report (filter.json) from here to pick its
+	// minimal discriminative set; the path convention lives in the cmd
+	// layer and must not be re-derived inside a paradigm. Modes
+	// without a synthesis pipeline leave it empty — and cannot route
+	// p1 (the configured mode rejects --optimizer outright).
+	SynthDir string
+	OnEvent  func(eval.Event)
 
 	// Opts carries paradigm-specific options keyed by convention
 	// "<paradigm>.<key>" (e.g. "evoprompt.variant" = ga|de). The engine
@@ -192,7 +236,7 @@ func (c *RecordCollector) Collect(ev eval.Event) {
 	if ev.Type != eval.EventSampleDone {
 		return
 	}
-	rec := SampleRecord{Response: ev.Response, Scores: ev.Scores}
+	rec := SampleRecord{Response: ev.Response, Scores: ev.Scores, ScoresSD: ev.ScoresSD}
 	if ev.Error != "" {
 		rec.Diagnosis = map[string]string{"error": ev.Error}
 	} else {

@@ -245,6 +245,9 @@ type engineOpts struct {
 	workers      int
 	budgetTokens int64
 	budgetEvals  int64
+	temperature  float64
+	reps         int
+	metrics      []string // defaults to json_validator + exact_match
 	usage        core.Usage
 	respond      func(call int, body string) (int, string)
 	ctx          context.Context // defaults to context.Background
@@ -270,10 +273,15 @@ func runEngine(t *testing.T, o engineOpts, samples []core.Sample) (core.RunResul
 
 	var mu sync.Mutex
 	var events []Event
+	metrics := o.metrics
+	if metrics == nil {
+		metrics = []string{"json_validator", "exact_match"}
+	}
 	e := &Engine{
 		RunID: "test-run", RunDir: dir, Model: "fake-model", MaxTokens: 64,
-		Workers: cmp.Or(o.workers, 1), Metrics: []string{"json_validator", "exact_match"},
+		Workers: cmp.Or(o.workers, 1), Metrics: metrics,
 		Budget: NewBudget(o.budgetTokens, o.budgetEvals), Provider: client,
+		Temperature: o.temperature, Reps: o.reps,
 		TaskName: "task", CandidateID: "cand", DatasetName: "ds",
 		OnEvent: func(ev Event) {
 			mu.Lock()

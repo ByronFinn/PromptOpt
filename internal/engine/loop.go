@@ -61,12 +61,15 @@ func NewLoop(req Request) (*Loop, error) {
 		constraint = "json_validator"
 	}
 	primary := req.Task.Primary()
-	row, means, gaps := baselineRow(req, primary)
+	row, means, sdRow, gaps := baselineRow(req, primary)
 	l := &Loop{
 		req: req, primary: primary, constraint: constraint,
 		frontier: &Frontier{}, records: map[string]map[string]SampleRecord{},
-		adv:          NewAdvisor(req),
-		baseline:     Member{Candidate: req.Initial, Scores: row, Means: means, Round: 0, Operator: OpBaseline},
+		adv: NewAdvisor(req),
+		baseline: Member{
+			Candidate: req.Initial, Scores: row, Means: means,
+			SD: sdRow, Reps: req.Reps, Round: 0, Operator: OpBaseline,
+		},
 		baselineGaps: gaps,
 	}
 	l.frontier.Add(l.baseline)
@@ -136,17 +139,27 @@ func (l *Loop) Evaluate(ctx context.Context, cand core.Candidate, samples []core
 	unitDir := filepath.Join(l.req.RunDir, evalsDir, fmt.Sprintf("%02d-%s", l.seq, sanitizeID(cand.ID)))
 	coll := newUnitCollector()
 	unit := &eval.Engine{
-		RunID:       l.req.RunID,
-		RunDir:      unitDir,
-		Model:       l.req.Model,
-		MaxTokens:   l.req.MaxTokens,
-		Workers:     max(l.req.Workers, 1),
-		Metrics:     l.req.Task.Metrics,
-		Budget:      l.req.Budget,
-		Provider:    l.req.Provider,
-		TaskName:    l.req.Task.Name,
-		CandidateID: cand.ID,
-		DatasetName: "synth",
+		RunID:                   l.req.RunID,
+		RunDir:                  unitDir,
+		Model:                   l.req.Model,
+		MaxTokens:               l.req.MaxTokens,
+		Workers:                 max(l.req.Workers, 1),
+		Metrics:                 l.req.Task.Metrics,
+		Budget:                  l.req.Budget,
+		Provider:                l.req.Provider,
+		JudgeProvider:           l.req.JudgeProvider,
+		JudgeModel:              l.req.JudgeModel,
+		JudgeMaxTokens:          l.req.JudgeMaxTokens,
+		JudgeBackend:            l.req.JudgeBackend,
+		DecisionClient:          l.req.DecisionClient,
+		JudgeDecisionConfidence: l.req.JudgeDecisionConfidence,
+		JudgeDecisionDiagBelow:  l.req.JudgeDecisionDiagBelow,
+		ExtraBody:               l.req.ExtraBody,
+		Temperature:             l.req.Temperature,
+		Reps:                    l.req.Reps,
+		TaskName:                l.req.Task.Name,
+		CandidateID:             cand.ID,
+		DatasetName:             "synth",
 		OnEvent: func(ev eval.Event) {
 			coll.observe(ev)
 			l.forward(ev, cand.ID, round)
@@ -189,20 +202,43 @@ func (l *Loop) BatchRecords(candID string, batch []core.Sample) []SampleRecord {
 
 // Admit projects records onto the fixed sample order (missing cells
 // count as 0, keeping the primary mean consistent with dominance
-// input), adds the child to the frontier — dominated or cloned
-// children are rejected but still recorded in the lineage — emits
-// frontier_updated and appends the lineage record. It returns whether
-// the child was admitted.
+// input), adds the child to the frontier — dominated, cloned or
+// ε-indistinguishable children are rejected but still recorded in the
+// lineage — emits frontier_updated and appends the lineage record. It
+// returns whether the child was admitted.
+//
+// Noise gate: when both the child's row and a current member's row
+// carry per-sample SD (both sides measured with Reps > 1), admission
+// goes through AddNoiseAware with the pooled per-dimension margin
+// max(child.SD[i], cur.SD[i]) — conservative pooling, an advantage
+// smaller than the noise band must not decide. A mixed pair (SD on
+// one side only) cannot arise on the wired path (pipeline baseline and
+// unit evaluations share the same Reps); it can only come from a
+// hand-edited artifact, and then the comparison degrades to plain Add
+// semantics — no margin protection, but no false eviction either.
 func (l *Loop) Admit(child core.Candidate, op string, parents []string, hyps []Hypothesis, round int, res core.RunResult, records []SampleRecord) (bool, error) {
 	childRow := recordsRow(records, l.req.Samples, l.primary)
+	childSD := recordsSDRow(records, l.req.Samples, l.primary)
 	childMeans := maps.Clone(res.MetricMeans)
 	if childMeans == nil {
 		childMeans = make(map[string]float64)
 	}
 	childMeans[l.primary] = mean(childRow)
-	admitted, evicted := l.frontier.Add(Member{
-		Candidate: child, Scores: childRow, Means: childMeans, Round: round, Operator: op,
-	})
+	marginOf := func(cur Member) []float64 {
+		if len(childSD) == 0 || len(cur.SD) == 0 {
+			// 混合态（单侧有 SD，异常工件）：退化为 Add 语义。
+			return nil
+		}
+		eps := make([]float64, len(childSD))
+		for i := range eps {
+			eps[i] = max(childSD[i], cur.SD[i])
+		}
+		return eps
+	}
+	admitted, evicted := l.frontier.AddNoiseAware(Member{
+		Candidate: child, Scores: childRow, Means: childMeans,
+		SD: childSD, Reps: l.req.Reps, Round: round, Operator: op,
+	}, marginOf)
 	l.Emit(EventFrontierUpdated, map[string]any{
 		"round": round, "candidate": child.ID, "admitted": admitted,
 		"evicted": evicted, "frontier_size": l.frontier.Size(),
@@ -307,7 +343,7 @@ func (c *unitCollector) observe(ev eval.Event) {
 	if ev.Type != eval.EventSampleDone {
 		return
 	}
-	rec := SampleRecord{Response: ev.Response, Scores: ev.Scores, Diagnosis: ev.Diagnosis}
+	rec := SampleRecord{Response: ev.Response, Scores: ev.Scores, ScoresSD: ev.ScoresSD, Diagnosis: ev.Diagnosis}
 	if ev.Error != "" {
 		rec.Diagnosis = map[string]string{"error": ev.Error}
 	}
@@ -335,7 +371,10 @@ func (c *unitCollector) records(samples []core.Sample) []SampleRecord {
 
 // baselineRow builds the baseline score row and means from the request
 // records; missing primary cells count as 0 and are counted as gaps.
-func baselineRow(req Request, primary string) (row []float64, means map[string]float64, gaps int) {
+// The returned sd row projects the records' per-sample in-sample
+// standard deviation (nil when no record carries one — the
+// single-shot shape).
+func baselineRow(req Request, primary string) (row []float64, means map[string]float64, sd []float64, gaps int) {
 	byID := make(map[string]SampleRecord, len(req.Baseline))
 	for _, rec := range req.Baseline {
 		byID[rec.Sample.ID] = rec
@@ -345,11 +384,17 @@ func baselineRow(req Request, primary string) (row []float64, means map[string]f
 		sums[m] = 0
 	}
 	row = make([]float64, len(req.Samples))
+	hasSD := false
+	sdRow := make([]float64, len(req.Samples))
 	for i, s := range req.Samples {
 		rec, ok := byID[s.ID]
 		if !ok {
 			gaps++
 			continue
+		}
+		if rec.ScoresSD != nil {
+			hasSD = true
+			sdRow[i] = rec.ScoresSD[primary]
 		}
 		seen := false
 		for m, v := range rec.Scores {
@@ -365,12 +410,15 @@ func baselineRow(req Request, primary string) (row []float64, means map[string]f
 			gaps++
 		}
 	}
+	if !hasSD {
+		sdRow = nil
+	}
 	n := float64(len(req.Samples))
 	means = make(map[string]float64, len(sums))
 	for m, sum := range sums {
 		means[m] = sum / n
 	}
-	return row, means, gaps
+	return row, means, sdRow, gaps
 }
 
 // recordsRow projects harvested records onto the fixed sample order;
@@ -383,6 +431,28 @@ func recordsRow(records []SampleRecord, samples []core.Sample, primary string) [
 	row := make([]float64, len(samples))
 	for i, s := range samples {
 		row[i] = byID[s.ID].Scores[primary]
+	}
+	return row
+}
+
+// recordsSDRow projects the records' per-sample in-sample sd onto the
+// fixed sample order; nil when no record carries one, so the SD
+// pipeline stays off for single-shot evidence.
+func recordsSDRow(records []SampleRecord, samples []core.Sample, primary string) []float64 {
+	byID := make(map[string]SampleRecord, len(records))
+	any := false
+	for _, rec := range records {
+		byID[rec.Sample.ID] = rec
+		if rec.ScoresSD != nil {
+			any = true
+		}
+	}
+	if !any {
+		return nil
+	}
+	row := make([]float64, len(samples))
+	for i, s := range samples {
+		row[i] = byID[s.ID].ScoresSD[primary]
 	}
 	return row
 }

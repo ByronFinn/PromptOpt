@@ -48,8 +48,13 @@ type FrontierMember struct {
 	Wins        int     `json:"wins"`
 	// Scores is the per-sample primary row over the retained set in
 	// sample_ids order; Prompt mirrors the candidate for self-contained
-	// downstream tooling (diff, adopt).
+	// downstream tooling (diff, adopt). SD is the matching per-sample
+	// in-sample standard deviation row and Reps the sampling depth —
+	// both omitted for single-shot artifacts (the historical shape), so
+	// legacy frontier.json files read unchanged.
 	Scores []float64 `json:"scores,omitempty"`
+	SD     []float64 `json:"sd,omitempty"`
+	Reps   int       `json:"reps,omitempty"`
 	Prompt string    `json:"prompt,omitempty"`
 }
 
@@ -107,7 +112,7 @@ func WriteOutputs(runDir string, in ReportInputs, f *Frontier) error {
 		view := FrontierMember{
 			ID: m.ID(), Round: m.Round, Operator: m.Operator,
 			PrimaryMean: m.Means[primary], Wins: f.Wins(m.ID()),
-			Scores: m.Scores, Prompt: m.Candidate.Prompt,
+			Scores: m.Scores, SD: m.SD, Reps: m.Reps, Prompt: m.Candidate.Prompt,
 		}
 		if constraint == "json_validator" {
 			view.JSONRate = m.Means[constraint]
@@ -148,7 +153,7 @@ func renderReport(in ReportInputs, f *Frontier, views []FrontierMember, best Mem
 	b.WriteString("## 概览\n\n")
 	fmt.Fprintf(&b, "- 优化轮数：%d（终止原因：%s）\n", res.Rounds, res.Reason)
 	b.WriteString("- 预算消耗（分角色）：\n")
-	for _, role := range []core.Role{core.RoleExecutor, core.RoleOptimizer} {
+	for _, role := range []core.Role{core.RoleExecutor, core.RoleJudge, core.RoleOptimizer} {
 		u := res.Usage[role]
 		fmt.Fprintf(&b, "  - %s：prompt=%d，completion=%d，合计=%d\n", role, u.PromptTokens, u.CompletionTokens, u.Total())
 	}

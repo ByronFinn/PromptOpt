@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"math"
 	"math/rand/v2"
 	"slices"
 
@@ -17,11 +18,17 @@ const (
 
 // Member is one candidate on the frontier. Scores is the per-sample
 // primary-metric row over the retained set (fixed sample order); Means
-// carries the per-metric means of the producing evaluation.
+// carries the per-metric means of the producing evaluation. With
+// multi-rep sampling Scores are k-rep means and SD is the per-sample
+// in-sample standard deviation of the primary metric over the same
+// fixed order (nil when the row was measured single-shot, i.e. the
+// historical shape); Reps records the sampling depth (0 reads as 1).
 type Member struct {
 	Candidate core.Candidate     `json:"candidate"`
 	Scores    []float64          `json:"scores"`
 	Means     map[string]float64 `json:"means"`
+	SD        []float64          `json:"sd,omitempty"`
+	Reps      int                `json:"reps,omitempty"`
 	Round     int                `json:"round"`
 	Operator  string             `json:"operator"`
 }
@@ -50,6 +57,50 @@ func Dominates(a, b []float64) bool {
 	return strictlyBetter
 }
 
+// DominatesWithMargin reports whether a dominates b under per-sample
+// noise margins eps: a_i ≥ b_i+eps_i on every sample and strictly
+// greater after the margin on at least one. The margin turns
+// dominance into a claim of advantage beyond sampling noise: an edge
+// smaller than the reps-derived ε must not decide admission or
+// eviction. eps entries are expected non-negative; unequal vector
+// lengths never dominate (same contract as Dominates).
+func DominatesWithMargin(a, b, eps []float64) bool {
+	if len(a) == 0 || len(a) != len(b) || len(eps) != len(a) {
+		return false
+	}
+	strictlyBetter := false
+	for i := range a {
+		if a[i] < b[i]+eps[i] {
+			return false
+		}
+		if a[i] > b[i]+eps[i] {
+			strictlyBetter = true
+		}
+	}
+	return strictlyBetter
+}
+
+// isEpsClone reports whether a and b are indistinguishable beyond the
+// noise margin: the largest per-sample absolute difference stays
+// within the largest ε. A candidate within the noise band of a current
+// member carries no decision-relevant evidence, so it must not enter
+// (or evict) based on that residue.
+func isEpsClone(a, b, eps []float64) bool {
+	if len(a) == 0 || len(a) != len(b) {
+		return false
+	}
+	maxEps := 0.0
+	for _, e := range eps {
+		maxEps = max(maxEps, e)
+	}
+	for i := range a {
+		if math.Abs(a[i]-b[i]) > maxEps {
+			return false
+		}
+	}
+	return true
+}
+
 // Frontier is the Pareto frontier over per-sample primary rows.
 // Monotonicity: admission rejects any candidate dominated by (or a
 // score-clone of) a current member, eviction only removes members the
@@ -71,6 +122,54 @@ func (f *Frontier) Add(m Member) (admitted bool, evictedIDs []string) {
 	kept := make([]Member, 0, len(f.members)+1)
 	for _, cur := range f.members {
 		if Dominates(m.Scores, cur.Scores) {
+			evictedIDs = append(evictedIDs, cur.ID())
+			continue
+		}
+		kept = append(kept, cur)
+	}
+	f.members = append(kept, m)
+	return true, evictedIDs
+}
+
+// AddNoiseAware is the reps-aware admission path: for every comparison
+// against a current member, marginOf supplies that pair's per-sample
+// ε (the pooled noise margin, caller-owned). Where marginOf returns a
+// usable ε row, admission is denied when the current member dominates
+// m beyond the margin or the pair is an ε-clone (max |Δ_i| ≤ max ε_i),
+// and eviction requires m to dominate the incumbent beyond the margin
+// — a sub-ε edge never decides. Where marginOf returns nil (no
+// per-sample SD on either side, the default single-shot path) the
+// comparison falls back to the exact Add semantics, so the default
+// path is byte-for-byte unchanged. A mixed pair (one side carries SD,
+// the other does not) degrades to Add too: no margin protection, but
+// no false eviction either.
+func (f *Frontier) AddNoiseAware(m Member, marginOf func(cur Member) []float64) (admitted bool, evictedIDs []string) {
+	epsOf := func(cur Member) []float64 {
+		if marginOf == nil {
+			return nil
+		}
+		return marginOf(cur)
+	}
+	for _, cur := range f.members {
+		if eps := epsOf(cur); len(eps) > 0 {
+			if DominatesWithMargin(cur.Scores, m.Scores, eps) || isEpsClone(cur.Scores, m.Scores, eps) {
+				return false, nil
+			}
+			continue
+		}
+		if Dominates(cur.Scores, m.Scores) || slices.Equal(cur.Scores, m.Scores) {
+			return false, nil
+		}
+	}
+	kept := make([]Member, 0, len(f.members)+1)
+	for _, cur := range f.members {
+		dominated := false
+		if eps := epsOf(cur); len(eps) > 0 {
+			dominated = DominatesWithMargin(m.Scores, cur.Scores, eps)
+		} else {
+			dominated = Dominates(m.Scores, cur.Scores)
+		}
+		if dominated {
 			evictedIDs = append(evictedIDs, cur.ID())
 			continue
 		}
