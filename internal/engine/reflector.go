@@ -55,6 +55,9 @@ func NewReflector(adv *Advisor) *Reflector { return &Reflector{adv: adv} }
 // Reflect builds the reflection context (task spec, parent prompt,
 // per-sample input/expected/response/scores/ASI diagnosis, ancestor
 // lessons) and parses the hypothesis pool.
+//
+// normalize 后为空的池（空数组或全 {input} 字面量清洗池）是模型的有意义
+// 回答而非协议错误：返回 (nil, nil)，不触发修复调用（PRD-0001 D9①）。
 func (r *Reflector) Reflect(ctx context.Context, task core.Task, parent core.Candidate, lessons []string, batch []SampleRecord, n int) ([]Hypothesis, error) {
 	raw, err := r.adv.Call(ctx, "reflect", buildReflectPrompt(task, parent, lessons, batch, n))
 	if err != nil {
@@ -63,17 +66,20 @@ func (r *Reflector) Reflect(ctx context.Context, task core.Task, parent core.Can
 	type hypothesesPayload struct {
 		Hypotheses []Hypothesis `json:"hypotheses"`
 	}
-	check := func(p hypothesesPayload) error {
-		if len(normalizeHypotheses(p.Hypotheses, n)) == 0 {
-			return errors.New("响应中没有可用假设")
-		}
-		return nil
-	}
-	payload, err := Defend(ctx, r.adv, "reflect", MarkerHypRepair, raw, check)
+	// 空假设池是模型的有意义回答而非协议错误（PRD-0001 D9①）：空数组与
+	// 全 {input} 字面量清洗池两形态同规——语义校验放行空池，池为空的裁决
+	// 统一移到 Defend 返回之后的 normalize 处。修复通道随之从「parse+语义」
+	// 缩为 parse-only：只有垃圾 JSON 才触发恰好一次修复调用。
+	payload, err := Defend(ctx, r.adv, "reflect", MarkerHypRepair, raw,
+		func(hypothesesPayload) error { return nil })
 	if err != nil {
 		return nil, err
 	}
-	return normalizeHypotheses(payload.Hypotheses, n), nil
+	hyps := normalizeHypotheses(payload.Hypotheses, n)
+	if len(hyps) == 0 {
+		return nil, nil
+	}
+	return hyps, nil
 }
 
 // normalizeHypotheses clips the pool to n, assigns missing ids,

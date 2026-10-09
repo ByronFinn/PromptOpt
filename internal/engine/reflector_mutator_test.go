@@ -188,6 +188,42 @@ func TestReflectorEmptyResponseShortCircuits(t *testing.T) {
 	}
 }
 
+// TestReflectorEmptyHypothesisPoolIsAMeaningfulAnswer: an empty
+// hypothesis pool is a meaningful model answer, not a protocol error
+// (PRD-0001 D9①). Both shapes — a bare empty array and entries wiped
+// out by the {input} literal cleaning — behave the same: Reflect
+// returns (nil, nil) after exactly one call with no repair fired.
+func TestReflectorEmptyHypothesisPoolIsAMeaningfulAnswer(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"empty array", `{"hypotheses":[]}`},
+		{"all {input} literals clean to empty", `{"hypotheses":[{"id":"h1","text":"{input}","confidence":0.9}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, bodies := startOptLLM(t, func(body string) string {
+				if strings.Contains(body, MarkerHypRepair) {
+					t.Errorf("repair fired on an empty pool: %.200s", body)
+				}
+				return tc.content
+			})
+			r := NewReflector(testAdvisor(t, srv))
+			hyps, err := r.Reflect(t.Context(), reflectTask(), core.Candidate{ID: "baseline", Prompt: "p {input}"}, nil, reflectBatch(), 3)
+			if err != nil {
+				t.Fatalf("Reflect: %v", err)
+			}
+			if hyps != nil {
+				t.Errorf("hypotheses = %+v, want nil", hyps)
+			}
+			if len(*bodies) != 1 {
+				t.Errorf("calls = %d, want exactly 1 (reflect only, no repair)", len(*bodies))
+			}
+		})
+	}
+}
+
 const candJSON = `{"id":"llm-id","name":"改写版","description":"更明确的输出要求","prompt":"你是资深中医辨证助手。仔细阅读：{input}。只输出证候名称。"}`
 
 func TestMutatorRewriteProducesCandidate(t *testing.T) {

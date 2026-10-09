@@ -626,3 +626,83 @@ func TestGepaAbortedByContext(t *testing.T) {
 		t.Fatalf("best = %s, want baseline", res.Best.ID)
 	}
 }
+
+// TestGepaEmptyHypothesisPoolSkipsRounds: when reflection returns an
+// empty hypothesis pool in every round — both shapes, a bare empty
+// array and entries wiped by the {input} literal cleaning — each round
+// takes the graceful skip branch (vista.Record(false) + round_done
+// skipped with 「没有可验证的假设」, the formerly dead branch), and the
+// run ends rounds_done with the baseline as best. Exactly one optimizer
+// call per round is burned (the reflection) and no mutation call ever
+// fires (PRD-0001 D9①).
+func TestGepaEmptyHypothesisPoolSkipsRounds(t *testing.T) {
+	for _, tc := range []struct{ name, pool string }{
+		{"empty array", `{"hypotheses":[]}`},
+		{"all {input} literals", `{"hypotheses":[{"id":"h1","text":"{input}","confidence":0.9}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := startOptLLM(t, func(body string) string {
+				if strings.Contains(body, MarkerReflect) {
+					return tc.pool
+				}
+				t.Errorf("unexpected optimizer call: %.200s", body)
+				return "{}"
+			})
+			var log eventLog
+			req := goldenRequest(t.TempDir(), eval.NewBudget(0, 0), log.record)
+			req.Provider = provider.NewOpenAI(srv.URL, "1", provider.OpenAIConfig{MaxAttempts: 1})
+
+			res, err := (&Gepa{}).Optimize(t.Context(), req)
+			if err != nil {
+				t.Fatalf("Optimize: %v", err)
+			}
+			if res.Reason != ReasonRoundsDone || res.Rounds != 6 {
+				t.Fatalf("reason = %s rounds = %d, want rounds_done/6", res.Reason, res.Rounds)
+			}
+			if res.Best.ID != "baseline" {
+				t.Fatalf("best = %s, want baseline", res.Best.ID)
+			}
+			// Each round closes with the graceful skip: no verifiable
+			// hypotheses (empty pool reached normalize → skipped round).
+			done := log.byType(EventRoundDone)
+			if len(done) != 6 {
+				t.Fatalf("round_done events = %d, want 6", len(done))
+			}
+			for i, ev := range done {
+				if ev.Detail["round"] != i+1 {
+					t.Errorf("round_done[%d] round = %v, want %d", i, ev.Detail["round"], i+1)
+				}
+				if ev.Detail["skipped"] != true || ev.Detail["error"] != "没有可验证的假设" {
+					t.Errorf("round %d round_done = %+v, want skipped with 「没有可验证的假设」", i+1, ev.Detail)
+				}
+			}
+			// Reflection reported the empty pool each round; nothing was
+			// ever validated.
+			rd := log.byType(EventReflectDone)
+			if len(rd) != 6 {
+				t.Fatalf("reflect_done events = %d, want 6", len(rd))
+			}
+			for i, ev := range rd {
+				if ev.Detail["hypotheses"] != 0 {
+					t.Errorf("round %d reflect_done hypotheses = %v, want 0", i+1, ev.Detail["hypotheses"])
+				}
+			}
+			if n := len(log.byType(EventHypoValidated)); n != 0 {
+				t.Errorf("hypotheses_validated events = %d, want 0", n)
+			}
+			// opt-calls = rounds × 1: the reflections only, no mutation
+			// call burned on a skipped round.
+			calls, err := os.ReadDir(filepath.Join(req.RunDir, "opt-calls"))
+			if err != nil || len(calls) != 6 {
+				t.Errorf("opt calls = %d (err %v), want 6 (one reflection per round)", len(calls), err)
+			}
+			// The trail keeps the baseline row only — nothing was mutated
+			// or admitted.
+			var lineage []LineageRecord
+			loadJSON(t, filepath.Join(req.RunDir, "lineage.json"), &lineage)
+			if len(lineage) != 1 || lineage[0].ID != "baseline" {
+				t.Fatalf("lineage = %+v, want only the baseline row", lineage)
+			}
+		})
+	}
+}
