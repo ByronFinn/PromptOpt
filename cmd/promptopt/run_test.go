@@ -221,7 +221,11 @@ func TestRunUsageErrors(t *testing.T) {
 	}{
 		{"missing --task", []string{"--candidate", cand, "--dataset", ds, "--base-url", srv.URL, "--model", "m", "--out", out}},
 		{"web and headless conflict", append(baseFlags(t, srv, task, cand, ds), "--out", out, "--web", "--headless")},
-		{"addr without web", append(baseFlags(t, srv, task, cand, ds), "--out", out, "--addr", "127.0.0.1:17701")},
+		// P10 方案 (a)：完整 host:port 地址与 --port 互斥（改写自
+		// 原「addr without web」——守卫删除后 --addr 单给隐含起看板，
+		// 正路径由 run_addr_port_test.go 的专项矩阵覆盖）。
+		{"addr with port conflict", append(baseFlags(t, srv, task, cand, ds), "--out", out, "--addr", "127.0.0.1:17701", "--port", "17000")},
+		{"port with headless", append(baseFlags(t, srv, task, cand, ds), "--out", out, "--port", "17000", "--headless")},
 		{"no base-url", []string{"--task", task, "--candidate", cand, "--dataset", ds, "--model", "m", "--out", out}},
 		{"no samples match split", append(baseFlags(t, srv, task, cand, ds), "--out", out, "--headless", "--split", "nosuch")},
 	}
@@ -763,10 +767,12 @@ var zc3Script = []zcEval{
 	{"发热微恶风寒，咽痛，脉浮数。", "风热犯表", 1, 0},
 }
 
-// TestRouteFeatures pins the auto-routing derivation rules (V5 处置①):
+// TestRouteFeatures pins the auto-routing derivation rules:
 // JointFewShot from train count + verifiable primary, TightBudget from
-// the budget flag vs the retained set, MultiConstraint from the metric
-// count, Pipeline without a V5 declaration source.
+// the budget flag vs GEPA's minimal effective run floor (提案 §3.1 ②,
+// (2+1+r_min)×kept with r_min=2), MultiConstraint from the metric
+// count. The Pipeline feature was removed with the textgrad intent
+// (提案 §3.2).
 func TestRouteFeatures(t *testing.T) {
 	task := core.Task{Name: "t", Metrics: []string{"exact_match"}}
 	kept := []core.Sample{
@@ -774,7 +780,7 @@ func TestRouteFeatures(t *testing.T) {
 	}
 
 	f := routeFeatures(task, kept, 0)
-	if !f.JointFewShot || f.TightBudget || f.MultiConstraint || f.Pipeline {
+	if !f.JointFewShot || f.TightBudget || f.MultiConstraint {
 		t.Errorf("features = %+v, want JointFewShot only", f)
 	}
 	// One train sample is not demo material.
@@ -785,15 +791,20 @@ func TestRouteFeatures(t *testing.T) {
 	if f := routeFeatures(core.Task{Metrics: []string{"rouge"}}, kept, 0); f.JointFewShot {
 		t.Errorf("features = %+v, want JointFewShot false for rouge", f)
 	}
-	// Setting a budget alone is not tight: below 2×kept is.
-	if f := routeFeatures(task, kept, 6); f.TightBudget {
-		t.Errorf("features = %+v, want TightBudget false at 2×kept", f)
+	// Tight is below GEPA's minimal effective run: probes + baseline +
+	// delivery ≈ 3 passes plus r_min=2 full rounds → 5×kept. A budget
+	// at the floor can still afford the run; below it routes p1.
+	if f := routeFeatures(task, kept, tightBudgetEvals(len(kept))); f.TightBudget {
+		t.Errorf("features = %+v, want TightBudget false at the minimal-run floor", f)
 	}
-	if f := routeFeatures(task, kept, 5); !f.TightBudget {
-		t.Errorf("features = %+v, want TightBudget true below 2×kept", f)
+	if f := routeFeatures(task, kept, tightBudgetEvals(len(kept))-1); !f.TightBudget {
+		t.Errorf("features = %+v, want TightBudget true below the minimal-run floor", f)
 	}
 	if f := routeFeatures(task, kept, 0); f.TightBudget {
 		t.Errorf("features = %+v, want TightBudget false without a budget", f)
+	}
+	if got, want := tightBudgetEvals(3), int64(15); got != want {
+		t.Errorf("tightBudgetEvals(3) = %d, want %d", got, want)
 	}
 	if f := routeFeatures(core.Task{Metrics: []string{"exact_match", "f1"}}, kept, 0); !f.MultiConstraint {
 		t.Errorf("features = %+v, want MultiConstraint true", f)
@@ -883,12 +894,12 @@ func TestRunOptimizerProviderUsageErrors(t *testing.T) {
 // options. The clients are not dialed here — construction only.
 func TestNewProviderWiring(t *testing.T) {
 	for _, name := range []string{"openai", "anthropic"} {
-		p, err := newProvider(name, "http://127.0.0.1:9", "k")
+		p, err := newProvider(name, "http://127.0.0.1:9", "k", 0, 0)
 		if err != nil || p == nil {
 			t.Errorf("newProvider(%q) = %v, %v; want a client", name, p, err)
 		}
 	}
-	if _, err := newProvider("bogus", "http://127.0.0.1:9", "k"); err == nil || !strings.Contains(err.Error(), "anthropic") {
+	if _, err := newProvider("bogus", "http://127.0.0.1:9", "k", 0, 0); err == nil || !strings.Contains(err.Error(), "anthropic") {
 		t.Errorf("newProvider(bogus) err = %v, want a refusal naming the options", err)
 	}
 }
@@ -924,14 +935,15 @@ func TestRunZeroConfigExplicitOptimizerGepa(t *testing.T) {
 	}
 }
 
-// TestRunZeroConfigAutoTightBudgetRoutesP1ToGepa pins the anchored
+// TestRunZeroConfigAutoTightBudgetRoutesP1 pins the anchored
 // auto-routing acceptance: a small --budget-evals flags TightBudget
-// (below 2× the retained 3), auto requests p1 and degrades onto gepa.
+// (below GEPA's minimal effective run floor, 提案 §3.1 ②) and auto
+// routes straight onto the registered p1 paradigm — no degrade chain.
 // The probes starve the budget (exit 2, baseline undispatched), but
 // routing resolves before the skip and the manifest records
 // requested/paradigm/reason — with train=2 in the fixture this also
 // pins that budget affordability outranks the JointFewShot rule.
-func TestRunZeroConfigAutoTightBudgetRoutesP1ToGepa(t *testing.T) {
+func TestRunZeroConfigAutoTightBudgetRoutesP1(t *testing.T) {
 	srv := startScriptedZeroConfigLLM(t, zc3Samples, zc3Script)
 	outDir := filepath.Join(t.TempDir(), "runs")
 
@@ -951,12 +963,14 @@ func TestRunZeroConfigAutoTightBudgetRoutesP1ToGepa(t *testing.T) {
 	if mf["optimizer_requested"] != "p1" {
 		t.Errorf("manifest optimizer_requested = %v, want p1 (tight budget)", mf["optimizer_requested"])
 	}
-	if mf["optimizer"] != "gepa" {
-		t.Errorf("manifest optimizer = %v, want gepa (p1 degraded)", mf["optimizer"])
+	if mf["optimizer"] != "p1" {
+		t.Errorf("manifest optimizer = %v, want p1 (registered, no degrade chain)", mf["optimizer"])
 	}
 	if reason, _ := mf["optimizer_route_reason"].(string); reason == "" {
 		t.Error("manifest optimizer_route_reason is empty")
-	} else if !strings.Contains(reason, "p1") || !strings.Contains(reason, "gepa") {
-		t.Errorf("manifest route reason = %q, want it to name p1 and gepa", reason)
+	} else if !strings.Contains(reason, "p1") {
+		t.Errorf("manifest route reason = %q, want it to name p1", reason)
+	} else if strings.Contains(reason, "降级") || strings.Contains(reason, "回退") {
+		t.Errorf("manifest route reason = %q, want no degrade/fallback trail", reason)
 	}
 }

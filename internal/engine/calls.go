@@ -38,6 +38,7 @@ type Advisor struct {
 	provider        provider.Provider
 	model           string
 	optMaxTokens    int
+	extraBody       map[string]any
 	dir             string
 	budget          *eval.Budget
 	optBudgetTokens int64
@@ -55,6 +56,7 @@ func NewAdvisor(req Request) *Advisor {
 		provider:        req.Provider,
 		model:           req.Model,
 		optMaxTokens:    req.OptMaxTokens,
+		extraBody:       req.ExtraBody,
 		dir:             filepath.Join(req.RunDir, "opt-calls"),
 		budget:          req.Budget,
 		optBudgetTokens: req.OptBudgetTokens,
@@ -134,6 +136,7 @@ func (a *Advisor) chat(ctx context.Context, stage, prompt string, tokenCap int) 
 		Model:     a.model,
 		MaxTokens: tokenCap,
 		Role:      core.RoleOptimizer,
+		ExtraBody: a.extraBody,
 		Messages:  []provider.Message{{Role: "user", Content: prompt}},
 	}
 	start := time.Now()
@@ -143,6 +146,7 @@ func (a *Advisor) chat(ctx context.Context, stage, prompt string, tokenCap int) 
 		SampleID:  stage,
 		Role:      core.RoleOptimizer,
 		Request:   req,
+		ExtraBody: a.extraBody,
 		Response:  resp,
 		LatencyMS: time.Since(start).Milliseconds(),
 		Time:      start,

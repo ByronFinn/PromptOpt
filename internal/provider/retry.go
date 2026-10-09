@@ -60,7 +60,13 @@ func retryDelay(err error, attempt int, backoff time.Duration) (time.Duration, b
 		}
 		return backoff << min(attempt, 16), true
 	}
-	if _, ok := errors.AsType[*transportError](err); ok {
+	if te, ok := errors.AsType[*transportError](err); ok {
+		// A per-attempt timeout hits the same deadline on every retry
+		// (tcmsp-30 实测：4×180s=723.9s 全废) — retrying cannot help,
+		// the operator must raise --timeout / PROMPTOPT_TIMEOUT.
+		if te.timeout > 0 {
+			return 0, false
+		}
 		return backoff << min(attempt, 16), true
 	}
 	return 0, false
@@ -87,10 +93,21 @@ func (e *StatusError) retryable() bool {
 }
 
 // transportError is a failed HTTP round trip (connection refused,
-// reset, per-attempt timeout, ...).
-type transportError struct{ cause error }
+// reset, per-attempt timeout, ...). A positive timeout marks the
+// per-attempt deadline expiration: retrying cannot help, and the
+// error points at the configurable knob.
+type transportError struct {
+	cause   error
+	timeout time.Duration // the deadline that expired; 0 = other transport failure
+}
 
-func (e *transportError) Error() string { return "llm request failed: " + e.cause.Error() }
+func (e *transportError) Error() string {
+	msg := "llm request failed: " + e.cause.Error()
+	if e.timeout > 0 {
+		msg += fmt.Sprintf("（单次尝试超过 %s 超时上限，已放弃重试：调大 --timeout 或设置 PROMPTOPT_TIMEOUT）", e.timeout)
+	}
+	return msg
+}
 
 func (e *transportError) Unwrap() error { return e.cause }
 

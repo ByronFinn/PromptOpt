@@ -148,6 +148,23 @@ func TestLoadTaskValidationMarked(t *testing.T) {
 	}
 }
 
+func TestValidMetricsCoverRegistryTCMPilot(t *testing.T) {
+	// The eval metric registry's shipped TCM set must pass task.yaml
+	// validation (examples/json_extraction declares tcm_f1_entity); the
+	// whitelist and the registry are maintained in sync (docs/plugins.md §8).
+	for _, m := range []string{
+		"tcm_f1_entity", "tcm_f1_syndrome", "tcm_f1_treatment", "tcm_f1_formula", "tcm_f1_herb",
+	} {
+		if !slices.Contains(ValidMetrics, m) {
+			t.Errorf("ValidMetrics missing %q", m)
+		}
+	}
+	if _, err := LoadTask(writeFixture(t,
+		"name: x\nprompt_template: \"{input}\"\nmetrics: [json_validator, tcm_f1_entity]\nprimary_metric: tcm_f1_entity\n")); err != nil {
+		t.Errorf("LoadTask with tcm_f1_entity: %v", err)
+	}
+}
+
 func TestLoadTaskFileMissing(t *testing.T) {
 	_, err := LoadTask(filepath.Join(t.TempDir(), "absent.yaml"))
 	if !errors.Is(err, fs.ErrNotExist) {

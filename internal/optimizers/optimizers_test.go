@@ -16,11 +16,11 @@ func (stubOptimizer) Optimize(context.Context, engine.Request) (engine.Result, e
 	return engine.Result{}, nil
 }
 
-// fullRegistry registers the four V5 paradigm names with stub
+// fullRegistry registers the five registered paradigm names with stub
 // factories — the routing table's complete target set.
 func fullRegistry() *Registry {
 	reg := NewRegistry()
-	for _, name := range []string{"gepa", "protegi", "miprov2", "evoprompt"} {
+	for _, name := range []string{"gepa", "protegi", "miprov2", "evoprompt", "p1"} {
 		reg.Register(Descriptor{
 			Capabilities: Capabilities{Name: name, Label: name + "-标签"},
 			Factory:      func() engine.Optimizer { return stubOptimizer{} },
@@ -31,7 +31,7 @@ func fullRegistry() *Registry {
 
 func TestRegistryRegisterGetNamesBuild(t *testing.T) {
 	reg := fullRegistry()
-	if names := reg.Names(); strings.Join(names, ",") != "evoprompt,gepa,miprov2,protegi" {
+	if names := reg.Names(); strings.Join(names, ",") != "evoprompt,gepa,miprov2,p1,protegi" {
 		t.Errorf("Names = %v, want sorted", names)
 	}
 	d, ok := reg.Get("gepa")
@@ -101,7 +101,7 @@ func TestRegistryRegisterPanics(t *testing.T) {
 	}
 }
 
-func TestRouteFiveRules(t *testing.T) {
+func TestRouteFourRules(t *testing.T) {
 	cases := []struct {
 		name      string
 		features  TaskFeatures
@@ -110,16 +110,15 @@ func TestRouteFiveRules(t *testing.T) {
 		degraded  bool
 	}{
 		{"default", TaskFeatures{}, "protegi", "protegi", false},
-		{"pipeline degrades textgrad", TaskFeatures{Pipeline: true}, "protegi", "textgrad", true},
-		{"tight budget degrades p1", TaskFeatures{TightBudget: true}, "gepa", "p1", true},
+		// Tight budget routes straight onto the registered p1 paradigm
+		// (V7): no degrade chain, 提案 §3.1.
+		{"tight budget routes p1", TaskFeatures{TightBudget: true}, "p1", "p1", false},
 		{"joint few-shot", TaskFeatures{JointFewShot: true}, "miprov2", "miprov2", false},
 		{"multi constraint", TaskFeatures{MultiConstraint: true}, "gepa", "gepa", false},
 		// Priority: budget affordability outranks data shape, which
-		// outranks multi-metric trade-offs; pipeline declaration wins
-		// over everything.
-		{"tight budget beats joint few-shot", TaskFeatures{TightBudget: true, JointFewShot: true}, "gepa", "p1", true},
+		// outranks multi-metric trade-offs.
+		{"tight budget beats joint few-shot", TaskFeatures{TightBudget: true, JointFewShot: true}, "p1", "p1", false},
 		{"joint few-shot beats multi constraint", TaskFeatures{JointFewShot: true, MultiConstraint: true}, "miprov2", "miprov2", false},
-		{"pipeline beats tight budget", TaskFeatures{Pipeline: true, TightBudget: true}, "protegi", "textgrad", true},
 	}
 	reg := fullRegistry()
 	for _, tc := range cases {
@@ -135,10 +134,13 @@ func TestRouteFiveRules(t *testing.T) {
 	}
 }
 
-func TestRouteDegradeReasonNamesParadigm(t *testing.T) {
+func TestRouteTightBudgetReasonNamesP1(t *testing.T) {
 	d := Route(fullRegistry(), TaskFeatures{TightBudget: true})
-	if !strings.Contains(d.Reason, "gepa") || !strings.Contains(d.Reason, "p1") {
-		t.Errorf("reason = %q, want it to name p1 and gepa", d.Reason)
+	if !strings.Contains(d.Reason, "p1") {
+		t.Errorf("reason = %q, want it to name p1", d.Reason)
+	}
+	if strings.Contains(d.Reason, "textgrad") || strings.Contains(strings.ToLower(d.Reason), "降级") {
+		t.Errorf("reason = %q, want no textgrad/degrade trail (提案 §3.2)", d.Reason)
 	}
 }
 
@@ -156,6 +158,12 @@ func TestRouteAvailabilityFallback(t *testing.T) {
 	}
 	if !strings.Contains(d.Reason, "回退 gepa") {
 		t.Errorf("reason = %q, want the fallback trail", d.Reason)
+	}
+	// p1 not registered (in-progress paradigm): tight budget still
+	// degrades onto gepa instead of failing.
+	d = Route(reg, TaskFeatures{TightBudget: true})
+	if d.Paradigm != "gepa" || d.Requested != "p1" || !d.Degraded {
+		t.Errorf("p1 fallback decision = %+v, want gepa/p1/degraded", d)
 	}
 	// gepa itself routes unchanged.
 	if d := Route(reg, TaskFeatures{MultiConstraint: true}); d.Paradigm != "gepa" || d.Degraded {

@@ -67,12 +67,16 @@ type auditSummary struct {
 
 // replayCallTrace decodes one CallTrace artifact. It is a local view:
 // the additive Stage field (llm_judge) decodes as the empty string on
-// artifacts predating it, so replay reads both generations.
+// artifacts predating it, so replay reads both generations. ExtraBody
+// (V7 --extra-body) reads as nil on artifacts predating it; carrying
+// it into the timeline is what lets the audit explain why the same
+// model behaves differently across calls.
 type replayCallTrace struct {
 	Seq       int                   `json:"seq"`
 	SampleID  string                `json:"sample_id"`
 	Role      core.Role             `json:"role"`
 	Request   provider.ChatRequest  `json:"request"`
+	ExtraBody map[string]any        `json:"extra_body,omitempty"`
 	Response  provider.ChatResponse `json:"response"`
 	LatencyMS int64                 `json:"latency_ms"`
 	Time      time.Time             `json:"time"`
@@ -193,6 +197,9 @@ func collectAudit(runDir, synthDir string, full bool) ([]auditEntry, auditSummar
 			detail := map[string]any{"prompt": clipBody(prompt, full)}
 			if tc.Response.Content != "" {
 				detail["response"] = clipBody(tc.Response.Content, full)
+			}
+			if len(tc.ExtraBody) > 0 {
+				detail["extra_body"] = tc.ExtraBody
 			}
 			if unit != "" {
 				detail["unit"] = unit

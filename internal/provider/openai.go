@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -22,7 +23,8 @@ type OpenAIConfig struct {
 	HTTPClient  *http.Client
 	MaxAttempts int           // total attempts including the first; default 4 (initial + 3 retries)
 	Backoff     time.Duration // exponential backoff base; default 500ms
-	Timeout     time.Duration // per-attempt deadline; default 180s (reasoning models are slow)
+	Timeout     time.Duration // per-attempt deadline; default 180s (reasoning models are slow); CLI: --timeout / PROMPTOPT_TIMEOUT
+	MaxRPS      float64       // client-side pacing, requests per second; 0 = off
 }
 
 // Client talks to an OpenAI-compatible /chat/completions endpoint.
@@ -38,6 +40,7 @@ type Client struct {
 	backoff     time.Duration
 	timeout     time.Duration
 	sleep       func(ctx context.Context, d time.Duration) error
+	limiter     *rateLimiter // nil when MaxRPS is off
 }
 
 // NewOpenAI returns a client for baseURL (e.g. http://host:port/v1).
@@ -52,6 +55,7 @@ func NewOpenAI(baseURL, apiKey string, cfg OpenAIConfig) *Client {
 		backoff:     cmp.Or(cfg.Backoff, 500*time.Millisecond),
 		timeout:     cmp.Or(cfg.Timeout, 180*time.Second),
 		sleep:       sleepContext,
+		limiter:     newRateLimiter(cfg.MaxRPS, time.Now),
 	}
 	if c.http == nil {
 		c.http = &http.Client{}
@@ -75,12 +79,25 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 
 // attempt performs one HTTP round trip.
 func (c *Client) attempt(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	// Pacing gate before every attempt (retries included): the limiter
+	// enforces the configured request rate while the retry policy's
+	// backoff and Retry-After waits stack on top of it.
+	if c.limiter != nil {
+		if err := c.limiter.Wait(ctx); err != nil {
+			return ChatResponse{}, err
+		}
+	}
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("encode request: %w", err)
+	}
+	// ExtraBody merges onto the payload's top level (user keys win);
+	// with no extras the payload bytes pass through untouched.
+	if payload, err = mergeExtraBody(payload, req.ExtraBody); err != nil {
+		return ChatResponse{}, err
 	}
 	httpReq, err := http.NewRequestWithContext(callCtx, http.MethodPost,
 		c.baseURL+"/chat/completions", bytes.NewReader(payload))
@@ -96,7 +113,13 @@ func (c *Client) attempt(ctx context.Context, req ChatRequest) (ChatResponse, er
 			// Caller canceled: not worth retrying.
 			return ChatResponse{}, fmt.Errorf("request aborted: %w", err)
 		}
-		// Per-attempt timeouts and other transport errors are retryable.
+		// A per-attempt deadline expiration would hit the same wall on
+		// every retry — classified so the retry policy gives up and the
+		// message points at the knob. Other transport errors (connection
+		// refused, reset, EOF) stay retryable.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return ChatResponse{}, &transportError{cause: err, timeout: c.timeout}
+		}
 		return ChatResponse{}, &transportError{cause: err}
 	}
 	defer resp.Body.Close()
@@ -130,6 +153,24 @@ func (c *Client) attempt(ctx context.Context, req ChatRequest) (ChatResponse, er
 		}
 	}
 	return out, nil
+}
+
+// mergeExtraBody merges the user-supplied extra body onto the
+// marshaled request payload's top level. Contract: ExtraBody keys
+// override the struct's own fields — the explicit --extra-body value
+// is the user's stated intent (e.g. a gateway-private parameter
+// colliding with a generic field name must win). With an empty extra
+// map the payload bytes are returned untouched (no key reordering).
+func mergeExtraBody(payload []byte, extra map[string]any) ([]byte, error) {
+	if len(extra) == 0 {
+		return payload, nil
+	}
+	var top map[string]any
+	if err := json.Unmarshal(payload, &top); err != nil {
+		return nil, fmt.Errorf("decode payload for extra_body merge: %w", err)
+	}
+	maps.Copy(top, extra)
+	return json.Marshal(top)
 }
 
 // chatCompletion mirrors the subset of the OpenAI chat-completions

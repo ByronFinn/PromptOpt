@@ -18,12 +18,19 @@ type Message struct {
 
 // ChatRequest asks a model to complete a conversation. Role drives
 // usage metering only and is never serialized to the wire format.
+// ExtraBody carries gateway-private JSON fields merged onto the wire
+// payload's top level (e.g. chat_template_kwargs to disable thinking
+// on local vLLM/Ollama gateways — the parameter shape varies per
+// gateway/model family, docs give examples, not a contract). It is
+// excluded from the struct's own serialization and merged by the
+// backends' attempt step; its audit trail lives on eval.CallTrace.
 type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	MaxTokens   int       `json:"max_tokens"`
-	Temperature float64   `json:"temperature,omitempty"`
-	Role        core.Role `json:"-"`
+	Model       string         `json:"model"`
+	Messages    []Message      `json:"messages"`
+	MaxTokens   int            `json:"max_tokens"`
+	Temperature float64        `json:"temperature,omitempty"`
+	Role        core.Role      `json:"-"`
+	ExtraBody   map[string]any `json:"-"`
 }
 
 // ChatResponse is the distilled completion of one request.

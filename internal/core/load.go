@@ -20,9 +20,15 @@ const InputPlaceholder = "{input}"
 var ErrValidation = errors.New("invalid document")
 
 // ValidMetrics lists the supported evaluation metrics. llm_judge is the
-// provider-backed LLM-as-judge score; the deterministic rest run
-// offline.
-var ValidMetrics = []string{"exact_match", "json_validator", "f1", "llm_judge"}
+// provider-backed LLM-as-judge score (engine-dispatched, reserved in
+// the eval metric registry); the deterministic rest run offline. The
+// tcm_f1_* block is the eval registry's shipped TCM dimension set
+// (internal/eval/metrics_tcm.go) — the list stays static because core
+// cannot import eval (the dependency edge points the other way).
+var ValidMetrics = []string{
+	"exact_match", "json_validator", "f1", "llm_judge",
+	"tcm_f1_entity", "tcm_f1_syndrome", "tcm_f1_treatment", "tcm_f1_formula", "tcm_f1_herb",
+}
 
 // ValidSplits lists the supported dataset splits.
 var ValidSplits = []string{"train", "dev", "test"}

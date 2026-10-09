@@ -21,12 +21,36 @@ import (
 // deterministic priority order: probe-1 before probe-2 before the
 // baseline evaluation.
 type Filter struct {
-	RunID     string
-	SynthDir  string // probe traces land in SynthDir/probes/vN/
-	Model     string
-	MaxTokens int
-	Workers   int
-	Provider  provider.Provider
+	RunID    string
+	SynthDir string // probe traces land in SynthDir/probes/vN/
+	Model    string
+	// MaxTokens is the probe completion budget. Temperature is
+	// forwarded to the probe engines; Reps deliberately is not — the
+	// K probe variants already span the per-sample variance, and
+	// multiplying by reps would inflate filter cost for no extra
+	// discrimination.
+	MaxTokens   int
+	Temperature float64
+	Workers     int
+	Provider    provider.Provider
+	// Judge coverage for the probe engines: a synthesized spec may
+	// declare llm_judge, and the probes must grade through the same
+	// judge surface as the baseline. Zero values fall back per field to
+	// Provider/Model/MaxTokens inside eval.Engine. JudgeBackend/
+	// DecisionClient forward the decision-model cascade (single judge
+	// per run — the pipeline's probes, baseline and the later
+	// optimization units share one surface).
+	JudgeProvider           provider.Provider
+	JudgeModel              string
+	JudgeMaxTokens          int
+	JudgeBackend            string
+	DecisionClient          *provider.SystemOneClient
+	JudgeDecisionConfidence float64
+	JudgeDecisionDiagBelow  float64
+	// ExtraBody carries gateway-private JSON fields into every probe
+	// engine's executor requests (same reasoning as the baseline: the
+	// probes hit the same gateway).
+	ExtraBody map[string]any
 	Budget    *eval.Budget
 }
 
@@ -46,18 +70,27 @@ func (f *Filter) Apply(ctx context.Context, spec SpecFile, samples []core.Sample
 	for i, probe := range spec.Probes {
 		coll := &scoreCollector{primary: primary, scores: map[string]float64{}}
 		engine := &eval.Engine{
-			RunID:       f.RunID,
-			RunDir:      filepath.Join(f.SynthDir, "probes", fmt.Sprintf("v%d", i+1)),
-			Model:       f.Model,
-			MaxTokens:   f.MaxTokens,
-			Workers:     max(f.Workers, 1),
-			Metrics:     spec.Task.Metrics,
-			Budget:      f.Budget,
-			Provider:    f.Provider,
-			TaskName:    spec.Task.Name,
-			CandidateID: fmt.Sprintf("probe-%d", i+1),
-			DatasetName: "synth",
-			OnEvent:     coll.collect,
+			RunID:                   f.RunID,
+			RunDir:                  filepath.Join(f.SynthDir, "probes", fmt.Sprintf("v%d", i+1)),
+			Model:                   f.Model,
+			MaxTokens:               f.MaxTokens,
+			Temperature:             f.Temperature,
+			Workers:                 max(f.Workers, 1),
+			Metrics:                 spec.Task.Metrics,
+			Budget:                  f.Budget,
+			Provider:                f.Provider,
+			JudgeProvider:           f.JudgeProvider,
+			JudgeModel:              f.JudgeModel,
+			JudgeMaxTokens:          f.JudgeMaxTokens,
+			JudgeBackend:            f.JudgeBackend,
+			DecisionClient:          f.DecisionClient,
+			JudgeDecisionConfidence: f.JudgeDecisionConfidence,
+			JudgeDecisionDiagBelow:  f.JudgeDecisionDiagBelow,
+			ExtraBody:               f.ExtraBody,
+			TaskName:                spec.Task.Name,
+			CandidateID:             fmt.Sprintf("probe-%d", i+1),
+			DatasetName:             "synth",
+			OnEvent:                 coll.collect,
 		}
 		if _, err := engine.Run(ctx, core.Candidate{ID: fmt.Sprintf("probe-%d", i+1), Prompt: probe}, samples); err != nil {
 			return FilterReport{}, fmt.Errorf("probe variant %d: %w", i+1, err)

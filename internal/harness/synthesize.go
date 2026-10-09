@@ -35,7 +35,11 @@ const (
 type Synthesizer struct {
 	Provider  provider.Provider
 	Model     string
-	MaxTokens int    // effective value floors at config.DefaultSynthMaxTokens
+	MaxTokens int // effective value floors at config.DefaultSynthMaxTokens
+	// ExtraBody carries gateway-private JSON fields (e.g.
+	// chat_template_kwargs to disable thinking) merged onto every
+	// synthesis call's wire payload top level.
+	ExtraBody map[string]any
 	Dir       string // synth/<run_id>
 
 	// floor is the token cap learned from a successful escalation:
@@ -188,6 +192,7 @@ func (s *Synthesizer) chat(ctx context.Context, stage, prompt string, tokenCap i
 		Model:     s.Model,
 		MaxTokens: tokenCap,
 		Role:      core.RoleOptimizer,
+		ExtraBody: s.ExtraBody,
 		Messages:  []provider.Message{{Role: "user", Content: prompt}},
 	}
 	start := time.Now()
@@ -197,6 +202,7 @@ func (s *Synthesizer) chat(ctx context.Context, stage, prompt string, tokenCap i
 		SampleID:  stage,
 		Role:      core.RoleOptimizer,
 		Request:   req,
+		ExtraBody: s.ExtraBody,
 		Response:  resp,
 		LatencyMS: time.Since(start).Milliseconds(),
 		Time:      start,

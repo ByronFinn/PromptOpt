@@ -26,7 +26,8 @@ type AnthropicConfig struct {
 	HTTPClient  *http.Client
 	MaxAttempts int           // total attempts including the first; default 4 (initial + 3 retries)
 	Backoff     time.Duration // exponential backoff base; default 500ms
-	Timeout     time.Duration // per-attempt deadline; default 180s (reasoning models are slow)
+	Timeout     time.Duration // per-attempt deadline; default 180s (reasoning models are slow); CLI: --timeout / PROMPTOPT_TIMEOUT
+	MaxRPS      float64       // client-side pacing, requests per second; 0 = off
 }
 
 // Anthropic talks to the native Anthropic /v1/messages endpoint. It
@@ -42,6 +43,7 @@ type Anthropic struct {
 	backoff     time.Duration
 	timeout     time.Duration
 	sleep       func(ctx context.Context, d time.Duration) error
+	limiter     *rateLimiter // nil when MaxRPS is off
 }
 
 // NewAnthropic returns a client for baseURL, the API root (e.g.
@@ -58,6 +60,7 @@ func NewAnthropic(baseURL, apiKey string, cfg AnthropicConfig) *Anthropic {
 		backoff:     cmp.Or(cfg.Backoff, 500*time.Millisecond),
 		timeout:     cmp.Or(cfg.Timeout, 180*time.Second),
 		sleep:       sleepContext,
+		limiter:     newRateLimiter(cfg.MaxRPS, time.Now),
 	}
 	if a.http == nil {
 		a.http = &http.Client{}
@@ -81,6 +84,13 @@ func (a *Anthropic) Chat(ctx context.Context, req ChatRequest) (ChatResponse, er
 
 // attempt performs one HTTP round trip against /v1/messages.
 func (a *Anthropic) attempt(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	// Pacing gate before every attempt (retries included); see the
+	// OpenAI client for how it stacks with the retry backoff.
+	if a.limiter != nil {
+		if err := a.limiter.Wait(ctx); err != nil {
+			return ChatResponse{}, err
+		}
+	}
 	payload, err := buildMessagesRequest(req)
 	if err != nil {
 		return ChatResponse{}, err
@@ -103,7 +113,12 @@ func (a *Anthropic) attempt(ctx context.Context, req ChatRequest) (ChatResponse,
 			// Caller canceled: not worth retrying.
 			return ChatResponse{}, fmt.Errorf("request aborted: %w", err)
 		}
-		// Per-attempt timeouts and other transport errors are retryable.
+		// Same classification as the OpenAI client: a per-attempt
+		// deadline expiration is terminal, other transport errors are
+		// retryable.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return ChatResponse{}, &transportError{cause: err, timeout: a.timeout}
+		}
 		return ChatResponse{}, &transportError{cause: err}
 	}
 	defer resp.Body.Close()
@@ -138,7 +153,10 @@ type messagesRequest struct {
 // buildMessagesRequest validates req and converts it to the Messages
 // wire format: system messages are split out into the top-level
 // system field and the remaining conversation is merged into
-// alternating user/assistant turns.
+// alternating user/assistant turns. ExtraBody merges onto the payload
+// top level after the conversion — passed through as-is, without
+// validating gateway-private field names (their shape varies per
+// gateway/model family; docs give examples, not a contract).
 func buildMessagesRequest(req ChatRequest) ([]byte, error) {
 	if req.MaxTokens <= 0 {
 		return nil, errors.New("anthropic request requires max_tokens > 0")
@@ -147,13 +165,17 @@ func buildMessagesRequest(req ChatRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(messagesRequest{
+	payload, err := json.Marshal(messagesRequest{
 		Model:       req.Model,
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 		System:      system,
 		Messages:    convo,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+	return mergeExtraBody(payload, req.ExtraBody)
 }
 
 // splitMessages separates system messages (concatenated into one

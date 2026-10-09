@@ -2,9 +2,11 @@ package eval
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -15,20 +17,77 @@ type MetricResult struct {
 	Diagnosis string
 }
 
-// Evaluate scores a raw model output against the expected value with
-// the named metric. Outputs are fence-stripped first; unknown metrics
-// score zero.
-func Evaluate(metric, output string, expected any) MetricResult {
-	switch metric {
-	case "json_validator":
-		return evalJSONValidator(output)
-	case "exact_match":
-		return evalExactMatch(output, expected)
-	case "f1":
-		return evalF1(output, expected)
-	default:
-		return MetricResult{Diagnosis: fmt.Sprintf("unknown metric %q", metric)}
+// MetricFunc scores a raw model output against the expected value.
+// Implementations strip fences themselves (stripFence) so a metric can
+// opt out when its input is not expected to be JSON-embedded.
+type MetricFunc func(output string, expected any) MetricResult
+
+// metricRegistry is the eval-side metric registry (roadmap V7 §2.3,
+// mirroring the optimizer registry pattern of docs/plugins.md): one
+// metric = one function + one registration line. Writes happen at
+// init/plugin-registration time only; evaluation workers read it
+// concurrently, hence the RWMutex.
+var (
+	metricMu       sync.RWMutex
+	metricRegistry = map[string]MetricFunc{}
+)
+
+// RegisterMetric installs fn under name and returns an error — instead
+// of the optimizer registry's panic — so registration sites can decide
+// their own failure policy; the in-repo init sites fail fast through
+// mustRegisterMetric. llm_judge is a reserved name: the engine
+// dispatches it outside the registry (it needs the provider and cannot
+// run inside the pure Evaluate path), so registering it is rejected.
+// Duplicate names are rejected to keep "registration = visible" honest.
+func RegisterMetric(name string, fn MetricFunc) error {
+	if name == "" {
+		return errors.New("metric name is empty")
 	}
+	if fn == nil {
+		return fmt.Errorf("metric %q: nil function", name)
+	}
+	if name == MetricLLMJudge {
+		return fmt.Errorf("metric %q is reserved: the engine dispatches it via the judge provider, it cannot run inside Evaluate", name)
+	}
+	metricMu.Lock()
+	defer metricMu.Unlock()
+	if _, dup := metricRegistry[name]; dup {
+		return fmt.Errorf("metric %q already registered", name)
+	}
+	metricRegistry[name] = fn
+	return nil
+}
+
+// mustRegisterMetric is the init-time registration helper: a conflict
+// here is a programming error, so fail fast like optimizers.Register.
+func mustRegisterMetric(name string, fn MetricFunc) {
+	if err := RegisterMetric(name, fn); err != nil {
+		panic(err)
+	}
+}
+
+// Evaluate scores a raw model output against the expected value with
+// the named metric, looked up in the metric registry. Outputs are
+// fence-stripped by the metric itself; unknown metrics score zero with
+// the historical diagnosis, byte for byte.
+func Evaluate(metric, output string, expected any) MetricResult {
+	metricMu.RLock()
+	fn, ok := metricRegistry[metric]
+	metricMu.RUnlock()
+	if ok {
+		return fn(output, expected)
+	}
+	return MetricResult{Diagnosis: fmt.Sprintf("unknown metric %q", metric)}
+}
+
+// Builtin deterministic metrics: same bodies as the pre-registry
+// switch, now registered so the registry is the single dispatch table.
+func init() {
+	mustRegisterMetric("json_validator", func(output string, _ any) MetricResult {
+		return evalJSONValidator(output)
+	})
+	mustRegisterMetric("exact_match", evalExactMatch)
+	mustRegisterMetric("f1", evalF1)
 }
 
 // evalJSONValidator scores 1 iff the whole (fence-stripped) output

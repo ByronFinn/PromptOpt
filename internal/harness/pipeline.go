@@ -31,6 +31,16 @@ const (
 // The returned RunResult is the baseline evaluation's summary; the
 // caller persists summary.json. Any error aborts the run with exit
 // code 1 at the caller.
+//
+// Statistical knobs: the probe filter only forwards Temperature (the
+// K probe variants already provide the variance signal — reps would
+// multiply probe cost for no extra discrimination), while the baseline
+// evaluation runs with the same Temperature AND Reps as the later
+// optimization units, so baseline and children rows share the
+// k-rep-mean protocol and their SDs are symmetric (noise-aware
+// admission compares like with like). Cost boundary of Reps > 1 on
+// this side: (k−1) × kept extra evaluations, metered into the shared
+// executor budget and eval slots; the default Reps 1 changes nothing.
 type Pipeline struct {
 	RunID          string
 	RunsDir        string // baseline run dir root (runs/)
@@ -38,14 +48,36 @@ type Pipeline struct {
 	Prompt         string // the user's natural-language prompt
 	Provider       provider.Provider
 	Model          string
-	MaxTokens      int // evaluation completion budget
+	MaxTokens      int     // evaluation completion budget
+	Temperature    float64 // executor sampling temperature (0 = gateway default)
+	Reps           int     // sampling repetitions per baseline sample (<= 1 = single)
 	SynthMaxTokens int
-	SamplesN       int
-	ProbeVariants  int
-	Workers        int
-	Budget         *eval.Budget // shared by probes and baseline
-	Mode           GateMode     // defaults to autopilot
-	OnEvent        func(eval.Event)
+	// Judge coverage: forwarded to the filter's probe engines and the
+	// baseline engine so a synthesized llm_judge spec grades through
+	// the run's judge surface. Zero values fall back per field to
+	// Provider/Model/MaxTokens inside eval.Engine. JudgeBackend/
+	// DecisionClient forward the decision-model cascade — the whole
+	// pipeline keeps one judge surface per run (the decision口径
+	// follows --judge-backend, so synthesis-side probes and the
+	// baseline never mix judges with the optimization loop).
+	JudgeProvider           provider.Provider
+	JudgeModel              string
+	JudgeMaxTokens          int
+	JudgeBackend            string
+	DecisionClient          *provider.SystemOneClient
+	JudgeDecisionConfidence float64
+	JudgeDecisionDiagBelow  float64
+	// ExtraBody carries gateway-private JSON fields forwarded to the
+	// synthesizer calls, the probe engines and the baseline engine —
+	// the whole pipeline hits the same gateway, where a thinking mode
+	// burning the completion budget would stall synthesis first.
+	ExtraBody     map[string]any
+	SamplesN      int
+	ProbeVariants int
+	Workers       int
+	Budget        *eval.Budget // shared by probes and baseline
+	Mode          GateMode     // defaults to autopilot
+	OnEvent       func(eval.Event)
 }
 
 // Run executes the flow. Synthesis usage is recorded under the
@@ -68,7 +100,8 @@ func (p *Pipeline) Run(ctx context.Context) (core.RunResult, error) {
 	}
 
 	synth := &Synthesizer{
-		Provider: p.Provider, Model: p.Model, MaxTokens: p.SynthMaxTokens, Dir: p.SynthDir,
+		Provider: p.Provider, Model: p.Model, MaxTokens: p.SynthMaxTokens,
+		ExtraBody: p.ExtraBody, Dir: p.SynthDir,
 	}
 	spec, err := synth.SynthesizeSpec(ctx, p.Prompt)
 	if err != nil {
@@ -96,8 +129,16 @@ func (p *Pipeline) Run(ctx context.Context) (core.RunResult, error) {
 
 	filter := &Filter{
 		RunID: p.RunID, SynthDir: p.SynthDir, Model: p.Model,
-		MaxTokens: p.MaxTokens, Workers: p.Workers,
+		MaxTokens: p.MaxTokens, Temperature: p.Temperature, Workers: p.Workers,
 		Provider: p.Provider, Budget: p.Budget,
+		JudgeProvider:           p.JudgeProvider,
+		JudgeModel:              p.JudgeModel,
+		JudgeMaxTokens:          p.JudgeMaxTokens,
+		JudgeBackend:            p.JudgeBackend,
+		DecisionClient:          p.DecisionClient,
+		JudgeDecisionConfidence: p.JudgeDecisionConfidence,
+		JudgeDecisionDiagBelow:  p.JudgeDecisionDiagBelow,
+		ExtraBody:               p.ExtraBody,
 	}
 	report, err := filter.Apply(ctx, SpecFile{Task: spec, Probes: probes}, samples, DefaultThresholds())
 	if err != nil {
@@ -157,18 +198,28 @@ func (p *Pipeline) Run(ctx context.Context) (core.RunResult, error) {
 	}
 
 	engine := &eval.Engine{
-		RunID:       p.RunID,
-		RunDir:      filepath.Join(p.RunsDir, p.RunID),
-		Model:       p.Model,
-		MaxTokens:   p.MaxTokens,
-		Workers:     max(p.Workers, 1),
-		Metrics:     specAfter.Task.Metrics,
-		Budget:      p.Budget,
-		Provider:    p.Provider,
-		TaskName:    specAfter.Task.Name,
-		CandidateID: "baseline",
-		DatasetName: "synth",
-		OnEvent:     p.OnEvent,
+		RunID:                   p.RunID,
+		RunDir:                  filepath.Join(p.RunsDir, p.RunID),
+		Model:                   p.Model,
+		MaxTokens:               p.MaxTokens,
+		Temperature:             p.Temperature,
+		Reps:                    p.Reps,
+		Workers:                 max(p.Workers, 1),
+		Metrics:                 specAfter.Task.Metrics,
+		Budget:                  p.Budget,
+		Provider:                p.Provider,
+		JudgeProvider:           p.JudgeProvider,
+		JudgeModel:              p.JudgeModel,
+		JudgeMaxTokens:          p.JudgeMaxTokens,
+		JudgeBackend:            p.JudgeBackend,
+		DecisionClient:          p.DecisionClient,
+		JudgeDecisionConfidence: p.JudgeDecisionConfidence,
+		JudgeDecisionDiagBelow:  p.JudgeDecisionDiagBelow,
+		ExtraBody:               p.ExtraBody,
+		TaskName:                specAfter.Task.Name,
+		CandidateID:             "baseline",
+		DatasetName:             "synth",
+		OnEvent:                 p.OnEvent,
 	}
 	return engine.Run(ctx, core.Candidate{ID: "baseline", Prompt: specAfter.Task.PromptTemplate}, kept)
 }

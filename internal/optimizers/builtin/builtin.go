@@ -11,6 +11,7 @@ import (
 	"github.com/ByronFinn/PromptOpt/internal/optimizers"
 	"github.com/ByronFinn/PromptOpt/internal/optimizers/evoprompt"
 	"github.com/ByronFinn/PromptOpt/internal/optimizers/miprov2"
+	"github.com/ByronFinn/PromptOpt/internal/optimizers/p1"
 	"github.com/ByronFinn/PromptOpt/internal/optimizers/protegi"
 )
 
@@ -27,8 +28,9 @@ func Registry() *optimizers.Registry {
 			Label:   "GEPA 反射进化",
 			Summary: "minibatch 反思生成假设、VISTA ε-greedy 选择、三级突变算子与逐样本帕累托前沿",
 			Paper:   "GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning and Strict Self-Improvement (Agarwal et al., 2024)",
-			// Serves the p1 intent (the retained set it optimizes over
-			// is already p¹-filtered) and multi-metric Pareto trade-offs.
+			// Serves directional feedback loops and multi-metric Pareto
+			// trade-offs; tight budgets route to the dedicated p1
+			// paradigm (V7), which reuses this engine over S*.
 			SuitsDirectional:     true,
 			SuitsMultiConstraint: true,
 			SuitsTightBudget:     true,
@@ -37,12 +39,12 @@ func Registry() *optimizers.Registry {
 	})
 	reg.Register(optimizers.Descriptor{
 		Capabilities: optimizers.Capabilities{
-			Name:  "protegi",
-			Label: "ProTeGi 文本梯度",
+			Name:    "protegi",
+			Label:   "ProTeGi 文本梯度",
 			Summary: "UCB1 折臂 bandit 选 minibatch、失败批评为自然语言文本梯度、沿梯度改写候选后全保留集评估，共享 Loop 帕累托准入（beam width 1 简化）",
-			Paper:  "Automatic Prompt Optimization with Gradient Descent and Beam Search (Yang et al., EMNLP 2023)",
+			Paper:   "Automatic Prompt Optimization with Gradient Descent and Beam Search (Yang et al., EMNLP 2023)",
 			// Directional text-gradient feedback loop; the auto router's
-			// default rule and the textgrad degrade chain both land here.
+			// default rule lands here.
 			SuitsDirectional: true,
 		},
 		Factory: func() engine.Optimizer { return protegi.New() },
@@ -70,6 +72,19 @@ func Registry() *optimizers.Registry {
 			// is reachable through an explicit --optimizer evoprompt.
 		},
 		Factory: func() engine.Optimizer { return evoprompt.New() },
+	})
+	reg.Register(optimizers.Descriptor{
+		Capabilities: optimizers.Capabilities{
+			Name:    "p1",
+			Label:   "p¹ 预算分配",
+			Summary: "p¹ 式预算分配启发式：读合成管线已产出的探针方差选最小辨识集 S*，GEPA 反思轮只在 S* 上评估，交付前对 Best 做全保留集终评",
+			Paper:   "p¹ variance filtering (arXiv:2604.08801)；本实现为预算分配启发式，不宣称复现论文数字",
+			// The auto router's tight-budget pick (提案 §3.1): the
+			// paradigm exists to make small evaluation budgets
+			// productive instead of starving a full-set loop.
+			SuitsTightBudget: true,
+		},
+		Factory: func() engine.Optimizer { return p1.New() },
 	})
 	return reg
 }

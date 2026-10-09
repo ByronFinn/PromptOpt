@@ -37,9 +37,6 @@ type Capabilities struct {
 	Summary string
 	// Paper cites the paradigm's origin.
 	Paper string
-	// SuitsPipeline marks fit for staged pipeline tasks (V6 task-level
-	// declaration).
-	SuitsPipeline bool
 	// SuitsDirectional marks fit for text-gradient style directional
 	// feedback loops.
 	SuitsDirectional bool
