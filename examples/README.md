@@ -4,7 +4,7 @@
 
 | 示例 | 任务 | 指标 | `expected` 形态 | README 重点用法 |
 | --- | --- | --- | --- | --- |
-| [json_extraction](json_extraction/) | 中医医疗命名实体抽取 | `json_validator` + `f1`（主 `f1`） | JSON 对象 | 双指标多约束；auto 下路由 gepa 做帕累托权衡 |
+| [json_extraction](json_extraction/) | 中医医疗命名实体抽取 | `json_validator` + `f1`（主 `f1`）+ `tcm_f1_entity`（分维度宏平均，指标注册表试点） | JSON 对象 | 双指标多约束；auto 下路由 gepa 做帕累托权衡 |
 | [sentiment_classification](sentiment_classification/) | 电商评论情感三分类 | `exact_match` | 标签字符串 | 显式 `--optimizer gepa`；标签类任务的严格判分 |
 | [text_summarization](text_summarization/) | 中文资讯一句话摘要 | `f1` | 参考摘要字符串 | `--optimizer auto` 自动路由；部分给分指标 |
 

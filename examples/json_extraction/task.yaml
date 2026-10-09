@@ -11,5 +11,7 @@ prompt_template: |
   文本：
   {input}
 
-metrics: [json_validator, f1]
+# tcm_f1_entity 是指标注册表的试点维度指标：按证候/治法/方剂/中药四类实体
+# 分维度多重集 F1 取宏平均，诊断行给分维度明细（internal/eval/metrics_tcm.go）。
+metrics: [json_validator, f1, tcm_f1_entity]
 primary_metric: f1

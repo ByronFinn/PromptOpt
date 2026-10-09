@@ -25,5 +25,7 @@
 ## 平台扩展
 
 - **主指标（Primary Metric）**：候选排序的首选指标，由 Harness Builder 在任务规格中声明、用户可改；输出契约 = 约束硬过滤 → 主指标排序 → Top-1，前沿全量附送。
-- **范式路由器（Paradigm Router）**：按任务特征选择优化范式的组件（V5 落地）：五级有序规则——流水线→textgrad、预算紧张→p1、指令+Few-shot 复合→miprov2、多维约束→gepa、默认→protegi；附"机制等价"降级链（textgrad→protegi、p1→gepa）与未注册范式回退 gepa。决策（范式/请求值/原因/是否降级）全量落 run manifest。
-- **Optimizer 接口**：多范式可插拔优化器的统一抽象（落位 internal/engine，ADR 0002）；范式实现经 internal/optimizers 注册表接入——已注册 gepa / miprov2 / evoprompt，protegi 实现已合入、注册行待补。共享脚手架（Loop：baseline 播种/评估单元/前沿准入/产物落盘）保证任何范式的 Best 永不为空。
+- **范式路由器（Paradigm Router）**：按任务特征选择优化范式的组件（V5 落地，V7 修正）：四级有序规则——预算紧张→p1、指令+Few-shot 复合→miprov2、多维约束→gepa、默认→protegi；无降级链（textgrad 意图与 Pipeline 特征已摘除，提案 §3.2），未注册范式回退 gepa。决策（范式/请求值/原因/是否降级）全量落 run manifest。
+- **Optimizer 接口**：多范式可插拔优化器的统一抽象（落位 internal/engine，ADR 0002）；范式实现经 internal/optimizers 注册表接入——已注册 gepa / protegi / miprov2 / evoprompt / p1。共享脚手架（Loop：baseline 播种/评估单元/前沿准入/产物落盘）保证任何范式的 Best 永不为空。
+- **p¹ 预算分配（p1 范式）**：非新搜索引擎——读合成管线已产出的探针方差（Request.SynthDir → synth/<id>/filter.json）选最小辨识集 S*（Top-m，m 由剩余预算反推），GEPA 反思轮只在 S* 上评估，交付前对 Best 做全保留集终评；搜索审计产物落 runs/<id>/p1-search/。p¹-inspired 预算分配启发式，不宣称复现论文数字（提案 §3.1）。
+- **跨 run 候选池（Candidate Pool，提案 §3.3）**：按任务键沉淀的历史 run 交付候选档案（artifact 文件制，不引入 SQLite）——与 Pareto 前沿的「候选池」不同：前沿是单次优化 run 内互不支配的候选集合，跨 run 池是 run 之间的长期资产。新 run 的交付候选与池内历史最优做同集配对对照（样本 ID 序列与逐样本输入哈希双一致才可配对），退化超过噪声区间即预警——同 verify 门禁的统计口径，但只预警不门禁、不喂回优化循环。

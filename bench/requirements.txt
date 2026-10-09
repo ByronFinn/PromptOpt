@@ -1,0 +1,12 @@
+# bench/ 基准对照脚手架依赖（docs/benchmark/protocol.md）。
+# 本目录仅服务基准对照：不进 go build、非 PromptOpt 运行时依赖。
+#
+# dspy 钉版依据：PyPI JSON API（pypi.org/pypi/dspy/json）info.version=3.4.0，
+# 取自 2026-10-08。协议（提案 §1.3）要求钉版本号；正式开跑前须复核一次
+# （提案 §6-B：跨实现可比的配置逐项核对后再钉死）。
+#
+# [optuna] extra 的依据：tcmsp-30 冒烟实测（2026-10-08）——dspy 3.4.0 的
+# MIPROv2 在 compile 期 `_import_optuna` 抛 ImportError，要求
+# `pip install dspy[optuna]`；optuna 具体版本随解析落进各 run 的结果
+# JSON 之外，正式开跑时如需可再加钉。
+dspy[optuna]==3.4.0
