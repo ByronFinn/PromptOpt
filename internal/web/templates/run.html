@@ -43,7 +43,7 @@
 <main>
 <h1><span class="badge {{.StatusClass}}">{{.Status}}</span><span class="mono">{{.ID}}</span></h1>
 <p class="sub">
-  <a href="/">← 返回 run 列表</a>{{if .SynthURL}} · <a href="{{.SynthURL}}">合成集审核</a>{{end}}{{if .HasFrontier}} · <a href="/runs/{{.ID}}/frontier">前沿看板</a>{{end}} · <a href="/runs/{{.ID}}/trace">trace 浏览器</a>{{if .HasReport}} · <a href="/runs/{{.ID}}/report">优化报告</a>{{end}} · <a href="/compare">run 对比</a>
+  <a href="/">← 返回 run 列表</a> · <a href="/runs/{{.ID}}/dashboard">四视图看板</a>{{if .SynthURL}} · <a href="{{.SynthURL}}">合成集审核</a>{{end}}{{if .HasFrontier}} · <a href="/runs/{{.ID}}/frontier">前沿看板</a>{{end}} · <a href="/runs/{{.ID}}/trace">trace 浏览器</a>{{if .HasReport}} · <a href="/runs/{{.ID}}/report">优化报告</a>{{end}} · <a href="/compare">run 对比</a>
 </p>
 
 <h2>run 摘要</h2>

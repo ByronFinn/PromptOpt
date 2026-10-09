@@ -58,7 +58,7 @@
 <div class="cards">
 {{range .Runs}}
   <div class="card">
-    <div><span class="badge {{.StatusClass}}">{{.Status}}</span> <a class="id" href="/runs/{{.ID}}">{{.ID}}</a></div>
+    <div><span class="badge {{.StatusClass}}">{{.Status}}</span> <a class="id" href="/runs/{{.ID}}">{{.ID}}</a> · <a href="/runs/{{.ID}}/dashboard">看板</a></div>
     {{if .HasSummary}}
     <div class="meta">{{.Task}} · {{.Candidate}} · {{.Dataset}}{{if .Split}} · split={{.Split}}{{end}} · {{.Started}}</div>
     <div class="meta">样本 {{.Evaluated}}/{{.Total}} · 失败 {{.Failed}} · 未派发 {{.Undispatched}} · exit {{.ExitCode}}</div>

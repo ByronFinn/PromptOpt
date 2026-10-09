@@ -1,0 +1,25 @@
+{
+  "model": "tev1:0.8b",
+  "answers": {
+    "q1": {
+      "type": "score",
+      "probabilities": {
+        "0": 0.1339,
+        "1": 0.345,
+        "2": 0.5209
+      },
+      "confidence": 0.111453,
+      "score": 1.386988025801118,
+      "legend": {
+        "0": "完全错误",
+        "1": "部分正确",
+        "2": "完全正确"
+      },
+      "selected": 2
+    }
+  },
+  "usage": {
+    "input_tokens": 123,
+    "output_tokens": 1
+  }
+}

@@ -221,6 +221,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /runs/{id}/report.html", s.handleReportStandalone)
 	mux.HandleFunc("GET /compare", s.handleComparePage)
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
+	s.registerDashboardRoutes(mux)
 	s.registerSynthRoutes(mux)
 	if s.bus != nil {
 		mux.HandleFunc("GET /events", s.handleLiveEvents)
@@ -482,11 +483,14 @@ func buildBudgetGauge(runDir string, res core.RunResult, hasSummary bool) *budge
 	limits := readManifestLimits(runDir)
 	g := &budgetGauge{}
 	if hasSummary {
-		for _, role := range []core.Role{core.RoleExecutor, core.RoleOptimizer} {
+		for _, role := range []core.Role{core.RoleExecutor, core.RoleJudge, core.RoleOptimizer} {
 			u, ok := res.UsageByRole[role]
 			if !ok {
 				continue
 			}
+			// The judge shares the executor token valve (total
+			// evaluation cost is one budget); only the optimizer role
+			// reads its own --budget-opt-tokens limit.
 			limit := limits.BudgetTokens
 			if role == core.RoleOptimizer {
 				limit = limits.BudgetOptTokens

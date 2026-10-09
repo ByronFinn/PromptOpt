@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ByronFinn/PromptOpt/internal/anchors"
 	"github.com/ByronFinn/PromptOpt/internal/config"
 	"github.com/ByronFinn/PromptOpt/internal/core"
 	"github.com/ByronFinn/PromptOpt/internal/engine"
@@ -30,7 +33,9 @@ import (
 	"github.com/ByronFinn/PromptOpt/internal/harness"
 	"github.com/ByronFinn/PromptOpt/internal/optimizers"
 	"github.com/ByronFinn/PromptOpt/internal/optimizers/builtin"
+	"github.com/ByronFinn/PromptOpt/internal/pool"
 	"github.com/ByronFinn/PromptOpt/internal/provider"
+	"github.com/ByronFinn/PromptOpt/internal/stats"
 	"github.com/ByronFinn/PromptOpt/internal/web"
 )
 
@@ -38,15 +43,55 @@ import (
 type runOptions struct {
 	taskPath, candidatePath, datasetPath  string
 	split, baseURL, model, apiKey, outDir string
+	taskKey                               string // anchor-library key; default derivation in taskKeyDefault
 	addr, prompt                          string
+	// port pairs with a host-only --addr (P10 分立参数): a full
+	// host:port --addr wins as-is and rejects --port; the set flags
+	// mark explicit --addr/--port (the flags carry defaults), drive the
+	// dashboard implication and the listen resolution in listenAddr.
+	port             int
+	addrSet, portSet bool
+	// runID pins a pre-minted run id; empty (the CLI case) mints one at
+	// run start. The MCP tools/call optimize surface pins one so the
+	// tool can locate <out>/<run_id>/summary.json deterministically.
+	runID                                 string
 	optimizer, providerName, evoVariant   string
 	maxTokens, budgetTokens, budgetEvals  int
 	workers, samples, probeVariants       int
 	maxRounds, minibatch, stagnationLimit int
-	epsilon                               float64
+	epsilon, temperature                  float64
+	reps                                  int
 	seed                                  int64
 	budgetOptTokens                       int64
 	web, headless, interactive            bool
+
+	// Judge surface: an optional second LLM for the llm_judge metric.
+	// Zero values keep the judge on the executor's configuration (the
+	// engine-level per-field fallback); base URL and API key fall back
+	// to the executor's only when building a dedicated provider.
+	judgeProvider, judgeBaseURL, judgeModel, judgeAPIKey string
+	judgeMaxTokens                                       int
+
+	// Decision-model judge surface (P7 级联): --judge-backend decision
+	// routes llm_judge grading through the SystemOne decision service
+	// (URL + model bind the decision surface) with a per-sample
+	// cascade fallback to the generative judge. Thresholds of 0 mean
+	// the eval-package defaults (0.5 confidence, 0.6 diagnosis line).
+	judgeBackend            string
+	judgeDecisionURL        string
+	judgeDecisionModel      string
+	judgeDecisionConfidence float64
+	judgeDecisionDiagBelow  float64
+
+	// Outbound safety valve and gateway-private extras: rps paces every
+	// built provider client (0 = off, the default); extraBody is the
+	// parsed --extra-body JSON merged onto the wire payload top level
+	// (gateway-private fields such as chat_template_kwargs to disable
+	// thinking). timeout is the explicit per-attempt provider deadline
+	// (0 = unset; the constructors' 180s default applies).
+	rps       float64
+	extraBody map[string]any
+	timeout   time.Duration
 }
 
 // runCommand implements the run subcommand. With a positional prompt
@@ -64,15 +109,25 @@ func runCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		return exitFailure
 	}
+	return execRun(o, os.Stdout)
+}
+
+// execRun dispatches the two run modes after flag parsing. stdout is
+// the headless summary channel, injected so callers own it: the CLI
+// passes os.Stdout (byte-identical to the pre-injection behavior) and
+// the MCP tools/call optimize surface passes io.Discard — there the
+// JSON-RPC stream owns stdout and the payload is read back from the
+// on-disk summary.json.
+func execRun(o runOptions, stdout io.Writer) int {
 	if o.prompt != "" {
-		return runSynthesized(o)
+		return runSynthesized(o, stdout)
 	}
-	return runManual(o)
+	return runManual(o, stdout)
 }
 
 // runManual is the configured mode: an explicit task/candidate/dataset
 // trio is evaluated with the candidate prompt, no synthesis involved.
-func runManual(o runOptions) int {
+func runManual(o runOptions, stdout io.Writer) int {
 	task, err := core.LoadTask(o.taskPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
@@ -94,13 +149,26 @@ func runManual(o runOptions) int {
 		return exitFailure
 	}
 
-	prov, err := newProvider(o.providerName, o.baseURL, o.apiKey)
+	prov, err := newProvider(o.providerName, o.baseURL, o.apiKey, o.rps, o.timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		return exitFailure
 	}
+	judgeProv, err := newJudgeProvider(judgeConn{
+		providerName: o.providerName, baseURL: o.baseURL, apiKey: o.apiKey, rps: o.rps, timeout: o.timeout,
+		judgeProvider: o.judgeProvider, judgeBaseURL: o.judgeBaseURL, judgeAPIKey: o.judgeAPIKey,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
+		return exitFailure
+	}
+	// Judge fallback notice: stderr-only so the headless stdout JSON
+	// summary stays unpolluted.
+	warnJudgeFallback(os.Stderr, task.Metrics, o)
 
-	runID := newRunID()
+	// runID normally mints here; a caller that pinned one (MCP
+	// tools/call optimize, so the tool can locate runDir) wins.
+	runID := cmp.Or(o.runID, newRunID())
 	runDir := filepath.Join(o.outDir, runID)
 	sink, err := startSink(o, runDir, "")
 	if err != nil {
@@ -109,13 +177,26 @@ func runManual(o runOptions) int {
 	}
 
 	// The manifest snapshots the run configuration for reproduction.
+	// task_key defaults to the task file's stem — verify --promote and
+	// --anchor-lib reproduce the library key from this snapshot.
+	o.taskKey = cmp.Or(o.taskKey, taskKeyDefault(o.prompt, o.taskPath))
 	if err := writeJSONFile(filepath.Join(runDir, "manifest.json"), runManifest{
 		RunID: runID, CreatedAt: time.Now().UTC(), Version: version,
 		Task: task.Name, Candidate: cand.ID, Dataset: dataset.Name, Split: o.split,
 		TaskPath: o.taskPath, CandidatePath: o.candidatePath, DatasetPath: o.datasetPath,
-		Model: o.model, BaseURL: o.baseURL, MaxTokens: o.maxTokens, Workers: o.workers,
+		TaskKey: o.taskKey,
+		Model:   o.model, BaseURL: o.baseURL, MaxTokens: o.maxTokens, Workers: o.workers,
 		BudgetTokens: int64(o.budgetTokens), BudgetEvals: int64(o.budgetEvals),
+		Temperature: o.temperature, Reps: o.reps,
 		Samples: len(samples), Provider: o.providerName,
+		RPS: o.rps, ExtraBody: o.extraBody,
+		TimeoutSeconds: int(o.timeout.Seconds()),
+		JudgeProvider: o.judgeProvider, JudgeBaseURL: o.judgeBaseURL,
+		JudgeModel: o.judgeModel, JudgeMaxTokens: o.judgeMaxTokens,
+		JudgeBackend: o.judgeBackend, JudgeDecisionURL: o.judgeDecisionURL,
+		JudgeDecisionModel:      o.judgeDecisionModel,
+		JudgeDecisionConfidence: o.judgeDecisionConfidence,
+		JudgeDecisionDiagBelow:  o.judgeDecisionDiagBelow,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		sink.close()
@@ -131,13 +212,35 @@ func runManual(o runOptions) int {
 		return exitFailure
 	}
 
+	// The pool's fixed-order primary row comes from the same event
+	// projection the verify gate uses (verifyCollector).
+	poolRows := &verifyCollector{primary: task.Primary()}
 	eng := &eval.Engine{
 		RunID: runID, RunDir: runDir, Model: o.model, MaxTokens: o.maxTokens,
 		Workers: o.workers, Metrics: task.Metrics, Split: o.split,
 		Budget:   eval.NewBudget(int64(o.budgetTokens), int64(o.budgetEvals)),
 		Provider: prov,
-		TaskName: task.Name, CandidateID: cand.ID, DatasetName: dataset.Name,
-		OnEvent: sink.fanout.emit,
+		// 手动模式与零配置统一解析 --temperature/--reps：flag 只在
+		// 零配置生效而手动静默丢弃的话，manifest 快照会与执行不一致
+		// （工件撒谎），且手动三件套正是 DSPy 预算对照跑 reps 的场景。
+		Temperature: o.temperature, Reps: o.reps,
+		JudgeProvider:           judgeProv,
+		JudgeModel:              o.judgeModel,
+		JudgeMaxTokens:          o.judgeMaxTokens,
+		JudgeBackend:            o.judgeBackend,
+		DecisionClient:          decisionClient(o),
+		JudgeDecisionConfidence: o.judgeDecisionConfidence,
+		JudgeDecisionDiagBelow:  o.judgeDecisionDiagBelow,
+		ExtraBody:               o.extraBody,
+		TaskName:                task.Name, CandidateID: cand.ID, DatasetName: dataset.Name,
+		OnEvent: func(ev eval.Event) {
+			// The pool's primary-row projection rides the same event
+			// stream (verifyCollector, the verify gate's seam): scores
+			// are harvested per sample id and projected onto the fixed
+			// sample order after Run.
+			poolRows.observe(ev)
+			sink.fanout.emit(ev)
+		},
 	}
 
 	res, err := eng.Run(sink.ctx, cand, samples)
@@ -150,7 +253,14 @@ func runManual(o runOptions) int {
 	// sample_done carries no usage payload), which the incremental gauge
 	// on the dashboard would otherwise miss.
 	sink.fanout.emit(engine.NewUsageEvent(eng.Budget, runID, "eval"))
-	return finishRun(o, sink, res, runDir, task.Primary(), nil)
+	// Cross-run candidate pool (提案 §3.3 最小版): the manual trio's fixed
+	// dataset is the one reachable same-set scenario — a completed run
+	// compares against the pool's historical best and appends its own
+	// record (rows projected from this evaluation's SampleTrace scores).
+	if res.ExitCode == exitOK {
+		poolReflect(o, runID, runDir, task.Primary(), samples, poolRows.rows(samples), res.MetricMeans, cand)
+	}
+	return finishRun(o, sink, res, runDir, task.Primary(), nil, stdout)
 }
 
 // runSynthesized is the zero-config mode: the positional natural-
@@ -165,13 +275,21 @@ func runManual(o runOptions) int {
 // stream and the events.jsonl replay survive the whole optimization.
 // Exactly one terminal run_done is emitted here, after the exit code
 // is finalized.
-func runSynthesized(o runOptions) int {
-	prov, err := newProvider(o.providerName, o.baseURL, o.apiKey)
+func runSynthesized(o runOptions, stdout io.Writer) int {
+	prov, err := newProvider(o.providerName, o.baseURL, o.apiKey, o.rps, o.timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		return exitFailure
 	}
-	runID := newRunID()
+	judgeProv, err := newJudgeProvider(judgeConn{
+		providerName: o.providerName, baseURL: o.baseURL, apiKey: o.apiKey, rps: o.rps, timeout: o.timeout,
+		judgeProvider: o.judgeProvider, judgeBaseURL: o.judgeBaseURL, judgeAPIKey: o.judgeAPIKey,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
+		return exitFailure
+	}
+	runID := cmp.Or(o.runID, newRunID())
 	runDir := filepath.Join(o.outDir, runID)
 	synthBase := synthRoot(o.outDir)
 	sink, err := startSink(o, runDir, synthBase)
@@ -191,20 +309,34 @@ func runSynthesized(o runOptions) int {
 	if o.seed == 0 {
 		o.seed = newSeed()
 	}
+	// task_key defaults to the prompt hash prefix: the synthesized task
+	// name is LLM-generated per run (internal/harness/synthesize.go) and
+	// unstable across runs — it cannot key the anchor library.
+	o.taskKey = cmp.Or(o.taskKey, taskKeyDefault(o.prompt, o.taskPath))
 	mode := harness.ModeAutopilot
 	if o.interactive {
 		mode = harness.ModeInteractive
 	}
 	if err := writeJSONFile(filepath.Join(runDir, "manifest.json"), runManifest{
 		RunID: runID, CreatedAt: time.Now().UTC(), Version: version,
-		Model: o.model, BaseURL: o.baseURL, MaxTokens: o.maxTokens, Workers: o.workers,
+		TaskKey: o.taskKey,
+		Model:   o.model, BaseURL: o.baseURL, MaxTokens: o.maxTokens, Workers: o.workers,
 		BudgetTokens: int64(o.budgetTokens), BudgetEvals: int64(o.budgetEvals),
+		Temperature: o.temperature, Reps: o.reps,
 		Mode: string(mode), Prompt: o.prompt,
 		SynthSamples: o.samples, ProbeVariants: o.probeVariants,
 		MaxRounds: o.maxRounds, Minibatch: o.minibatch, Epsilon: o.epsilon,
 		StagnationLimit: o.stagnationLimit, Seed: o.seed,
 		BudgetOptTokens: o.budgetOptTokens,
 		Optimizer:       o.optimizer, Provider: o.providerName, EvoVariant: o.evoVariant,
+		RPS: o.rps, ExtraBody: o.extraBody,
+		TimeoutSeconds: int(o.timeout.Seconds()),
+		JudgeProvider: o.judgeProvider, JudgeBaseURL: o.judgeBaseURL,
+		JudgeModel: o.judgeModel, JudgeMaxTokens: o.judgeMaxTokens,
+		JudgeBackend: o.judgeBackend, JudgeDecisionURL: o.judgeDecisionURL,
+		JudgeDecisionModel:      o.judgeDecisionModel,
+		JudgeDecisionConfidence: o.judgeDecisionConfidence,
+		JudgeDecisionDiagBelow:  o.judgeDecisionDiagBelow,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", err)
 		sink.close()
@@ -218,7 +350,16 @@ func runSynthesized(o runOptions) int {
 		Prompt:   o.prompt,
 		Provider: prov,
 		Model:    o.model, MaxTokens: o.maxTokens, SynthMaxTokens: o.maxTokens,
-		SamplesN: o.samples, ProbeVariants: o.probeVariants, Workers: o.workers,
+		Temperature: o.temperature, Reps: o.reps,
+		JudgeProvider:           judgeProv,
+		JudgeModel:              o.judgeModel,
+		JudgeMaxTokens:          o.judgeMaxTokens,
+		JudgeBackend:            o.judgeBackend,
+		DecisionClient:          decisionClient(o),
+		JudgeDecisionConfidence: o.judgeDecisionConfidence,
+		JudgeDecisionDiagBelow:  o.judgeDecisionDiagBelow,
+		ExtraBody:               o.extraBody,
+		SamplesN:                o.samples, ProbeVariants: o.probeVariants, Workers: o.workers,
 		Budget:  budget,
 		Mode:    mode,
 		OnEvent: emit,
@@ -243,6 +384,9 @@ func runSynthesized(o runOptions) int {
 	primary := ""
 	if spec, err := harness.LoadSpec(filepath.Join(synthBase, runID)); err == nil {
 		primary = spec.Task.Primary()
+		// The synthesized spec is the first place the zero-config mode
+		// knows whether llm_judge is declared; warn here (stderr-only).
+		warnJudgeFallback(os.Stderr, spec.Task.Metrics, o)
 	}
 
 	// Resolve the optimizer paradigm now that the retained set is
@@ -260,7 +404,7 @@ func runSynthesized(o runOptions) int {
 	// terminal run_done and keep the exit contract (2 / 1).
 	if res.Status != core.StatusCompleted {
 		fanoutTerminalRunDone(sink.fanout.emit, res)
-		return finishRun(o, sink, res, runDir, primary, nil)
+		return finishRun(o, sink, res, runDir, primary, nil, stdout)
 	}
 
 	var optRes engine.Result
@@ -268,7 +412,7 @@ func runSynthesized(o runOptions) int {
 	if opt == nil {
 		optErr = routeErr
 	} else {
-		optRes, optErr = runOptimization(sink.ctx, runID, runDir, filepath.Join(synthBase, runID), o, prov, budget, collector, emit, opt)
+		optRes, optErr = runOptimization(sink.ctx, runID, runDir, filepath.Join(synthBase, runID), o, prov, judgeProv, budget, collector, emit, opt)
 	}
 	if optErr != nil {
 		fmt.Fprintf(os.Stderr, "promptopt run: %v\n", optErr)
@@ -298,7 +442,7 @@ func runSynthesized(o runOptions) int {
 	if optErr == nil {
 		best = &optRes
 	}
-	return finishRun(o, sink, res, runDir, primary, best)
+	return finishRun(o, sink, res, runDir, primary, best, stdout)
 }
 
 // resolveOptimizer picks the run's paradigm and rewrites the
@@ -376,15 +520,15 @@ func retainedSamples(synthDir string) ([]core.Sample, error) {
 
 // routeFeatures derives the auto-routing input from the task, the
 // retained set and the eval budget flag. The derivation is pinned
-// here (unit-testable, no hidden state); V6 upgrades the heuristics
-// to task-level structured declarations (docs/plugins.md):
+// here (unit-testable, no hidden state); task-level structured
+// declarations remain the upgrade path (docs/plugins.md):
 //
-//   - Pipeline has no V5 declaration source and stays false;
 //   - JointFewShot needs ≥2 train samples plus a verifiable primary
 //     metric — joint instruction+demo search is pointless without
 //     demo material or an automatic verdict;
-//   - TightBudget marks a budget below two full retained-set passes
-//     (setting a budget alone is not "tight");
+//   - TightBudget marks a budget that cannot afford GEPA's minimal
+//     effective run — routing GEPA there would send the loop to
+//     starve, so it goes to p1 instead (提案 §3.1 ②);
 //   - MultiConstraint is any multi-metric task.
 func routeFeatures(task core.Task, kept []core.Sample, budgetEvals int64) optimizers.TaskFeatures {
 	train := 0
@@ -395,9 +539,21 @@ func routeFeatures(task core.Task, kept []core.Sample, budgetEvals int64) optimi
 	}
 	return optimizers.TaskFeatures{
 		JointFewShot:    train >= 2 && slices.Contains(verifiablePrimaries, task.Primary()),
-		TightBudget:     budgetEvals > 0 && budgetEvals < 2*int64(len(kept)),
+		TightBudget:     budgetEvals > 0 && budgetEvals < tightBudgetEvals(len(kept)),
 		MultiConstraint: len(task.Metrics) > 1,
 	}
+}
+
+// tightBudgetEvals is the per-kept-sample evaluation cost below which
+// a GEPA run cannot afford its minimal effective shape (提案 §3.1 ②):
+// two probe variants + one baseline pass + minEffectiveRounds full
+// passes. Setting a budget alone is not "tight"; a budget under this
+// threshold would starve the baseline and the loop would be skipped —
+// exactly the dead rule the old `budgetEvals < 2×kept` produced.
+const minEffectiveRounds = 2
+
+func tightBudgetEvals(kept int) int64 {
+	return (2 + 1 + minEffectiveRounds) * int64(kept)
 }
 
 // verifiablePrimaries are the per-sample auto-judged metrics — the
@@ -407,9 +563,10 @@ var verifiablePrimaries = []string{"exact_match", "f1", "json_validator", "llm_j
 // runOptimization drives the resolved optimizer over the retained
 // sample set: it recomputes the kept samples (the checkpoint pause may
 // have edited them), harvests the baseline records and wires the
-// engine request with the paradigm options injected.
+// engine request with the paradigm options injected. judgeProv is the
+// optional dedicated judge provider (nil = judge falls back to prov).
 func runOptimization(ctx context.Context, runID, runDir, synthDir string, o runOptions,
-	prov provider.Provider, budget *eval.Budget, collector *engine.RecordCollector, emit func(eval.Event), opt engine.Optimizer) (engine.Result, error) {
+	prov, judgeProv provider.Provider, budget *eval.Budget, collector *engine.RecordCollector, emit func(eval.Event), opt engine.Optimizer) (engine.Result, error) {
 	spec, err := harness.LoadSpec(synthDir)
 	if err != nil {
 		return engine.Result{}, fmt.Errorf("reload spec.json: %w", err)
@@ -436,14 +593,92 @@ func runOptimization(ctx context.Context, runID, runDir, synthDir string, o runO
 		Baseline: collector.Records(kept),
 		Provider: prov,
 		Model:    o.model, MaxTokens: o.maxTokens, OptMaxTokens: o.maxTokens,
-		Workers:         o.workers,
-		Budget:          budget,
-		OptBudgetTokens: o.budgetOptTokens,
-		RunID:           runID, RunDir: runDir,
-		OnEvent: emit,
-		Opts:    map[string]string{"evoprompt.variant": o.evoVariant},
+		JudgeProvider:           judgeProv,
+		JudgeModel:              o.judgeModel,
+		JudgeMaxTokens:          o.judgeMaxTokens,
+		JudgeBackend:            o.judgeBackend,
+		DecisionClient:          decisionClient(o),
+		JudgeDecisionConfidence: o.judgeDecisionConfidence,
+		JudgeDecisionDiagBelow:  o.judgeDecisionDiagBelow,
+		ExtraBody:               o.extraBody,
+		Workers:                 o.workers,
+		Temperature:             o.temperature,
+		Reps:                    o.reps,
+		Budget:                  budget,
+		OptBudgetTokens:         o.budgetOptTokens,
+		RunID:                   runID, RunDir: runDir,
+		// SynthDir hands the paradigm the synthesis artifact root; p1
+		// reads the probe variance report from it (提案 §3.1) instead
+		// of re-deriving the synth/<id> path convention.
+		SynthDir: synthDir,
+		OnEvent:  emit,
+		Opts:     map[string]string{"evoprompt.variant": o.evoVariant},
 	}
-	return opt.Optimize(ctx, req)
+	res, err := opt.Optimize(ctx, req)
+	if err != nil {
+		return res, err
+	}
+	// Cross-run candidate pool (提案 §3.3 最小版): the write lands after
+	// the Loop's Finish/WriteOutputs — the frontier member carrying Best
+	// holds the delivered candidate's fixed-order primary row. Zero-config
+	// synth sets differ per run, so this usually records the entry and
+	// stays below the same-set CI branch (the manual trio is the one
+	// reachable scenario for it).
+	if row, ok := frontierBestRow(res); ok {
+		poolReflect(o, runID, runDir, spec.Task.Primary(), kept, row, res.BestMeans, res.Best)
+	}
+	return res, nil
+}
+
+// frontierBestRow projects the delivered best's per-sample primary row
+// from the frontier: Loop.Finish always finds Best on the frontier, so
+// the row rides the member record (fixed sample order, same projection
+// as lineage/report). ok=false would mean an off-frontier best — the
+// pool write is skipped (advisory), never the run.
+func frontierBestRow(res engine.Result) ([]float64, bool) {
+	for _, m := range res.Frontier {
+		if m.ID() == res.Best.ID {
+			return m.Scores, len(m.Scores) > 0
+		}
+	}
+	return nil, false
+}
+
+// warnJudgeFallback prints one stderr line when the task declares
+// llm_judge but no judge surface was configured: the judge then grades
+// through the executor's provider/model/tokens, which is fine for
+// self-evaluation but worth flagging. stderr-only — the headless
+// stdout JSON summary stays unpolluted. The decision backend is its
+// own configured judge (URL+model bind the decision surface), so the
+// notice does not fire for it.
+func warnJudgeFallback(w io.Writer, metrics []string, o runOptions) {
+	if !slices.Contains(metrics, eval.MetricLLMJudge) {
+		return
+	}
+	if o.judgeBackend == eval.JudgeBackendDecision {
+		return
+	}
+	// "No judge configuration" means none of the five fields was set:
+	// a lone --judge-base-url/--judge-api-key already separates the
+	// judge instance, so the fallback notice would be lying then.
+	if o.judgeProvider != "" || o.judgeBaseURL != "" || o.judgeAPIKey != "" ||
+		o.judgeModel != "" || o.judgeMaxTokens != 0 {
+		return
+	}
+	fmt.Fprintln(w, "promptopt run: 任务声明 llm_judge 但未配置裁判（--judge-provider/--judge-model/--judge-max-tokens），裁判回退执行器配置（同 Provider/Model/MaxTokens）")
+}
+
+// decisionClient builds the P7 decision-model judge surface when
+// --judge-backend decision is on: the URL+model pair binds inside the
+// client (one client serves one decision model for the whole run, the
+// same binding rule as judgeConn). parseRunFlags already guaranteed
+// both fields under the decision backend, so this never builds a
+// half-configured surface; nil keeps the generative judge.
+func decisionClient(o runOptions) *provider.SystemOneClient {
+	if o.judgeBackend != eval.JudgeBackendDecision {
+		return nil
+	}
+	return provider.NewSystemOne(o.judgeDecisionURL, o.judgeDecisionModel, provider.SystemOneConfig{Timeout: o.timeout})
 }
 
 // fanoutTerminalRunDone emits the single terminal run_done carrying
@@ -464,6 +699,113 @@ func newSeed() int64 {
 		return time.Now().UTC().UnixNano()
 	}
 	return int64(binary.BigEndian.Uint64(b[:]) >> 1)
+}
+
+// taskKeyDefault derives the anchor-library key when --task-key is
+// unset (提案 §1.2): the zero-config prompt hashes to its first 12 hex
+// characters — the synthesized task name is LLM-generated per run and
+// unusable as a key — and the configured mode falls back to the task
+// file's stem. Stability is a user convention: a renamed task file or
+// an edited prompt starts a new library (宁缺勿错 — no fuzzy matching).
+// The hash goes through core.HashInput, the single shared
+// normalization+hash seam (P5/P8 共用).
+func taskKeyDefault(prompt, taskPath string) string {
+	if prompt != "" {
+		return core.HashInput(prompt)[:12]
+	}
+	if taskPath != "" {
+		return strings.TrimSuffix(filepath.Base(taskPath), filepath.Ext(taskPath))
+	}
+	return ""
+}
+
+// poolRoot places the cross-run candidate pool next to the synthesis
+// tree (the same <out>/../ convention as synthRoot): the default
+// --out runs/ yields a sibling pool/ directory, git-versionable like
+// anchors/.
+func poolRoot(runsDir string) string {
+	return filepath.Join(runsDir, "..", "pool")
+}
+
+// poolReflect is a finished run's whole cross-run candidate pool
+// interaction (提案 §3.3 最小版): compare the delivered candidate
+// against the pool's historical best, emit the stderr warnings, then
+// append this run's record. Only a double-consistent sample set (ID
+// sequence AND per-sample input hash) runs the paired-bootstrap
+// degradation warning; anything else degrades to a mean-only hint —
+// deterministic IDs over different content cannot fake a pairing. The
+// read happens here rather than at run start because the pairing needs
+// this run's rows, which only exist after evaluation; Best is fetched
+// before the append, so a run never compares against its own record.
+// The pool is advisory: failures warn on stderr and never fail the
+// run, and a regression is additionally recorded in the manifest's
+// pool_warning (verify 门禁语义不受影响——预警不改变退出码).
+func poolReflect(o runOptions, runID, runDir, primary string,
+	samples []core.Sample, rows []float64, means map[string]float64, cand core.Candidate) string {
+	if len(samples) == 0 || len(rows) != len(samples) {
+		return ""
+	}
+	ids := make([]string, len(samples))
+	hashes := make([]string, len(samples))
+	for i, s := range samples {
+		ids[i] = s.ID
+		hashes[i] = core.HashInput(s.Input)
+	}
+	entry := pool.Entry{
+		CandidateID: cand.ID, Prompt: cand.Prompt, Means: means,
+		Rows: rows, InputHashes: hashes, SampleIDs: ids,
+		RunID: runID, AddedAt: time.Now().UTC(),
+	}
+	store := pool.NewPoolStore(poolRoot(o.outDir))
+	var warning string
+	best, found, err := store.Best(o.taskKey, primary)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: 读取候选池失败，跳过对照: %v\n", err)
+	} else if found {
+		cmp := pool.Compare(entry, best, primary)
+		if cmp.SameSet {
+			if cmp.Verdict == stats.CIRegressed {
+				warning = fmt.Sprintf("regressed: CI=[%.4f,%.4f] 下界超阈值 %.2f（对照 run %s candidate %s，%s 均值 %.4f→%.4f）",
+					cmp.Lo, cmp.Hi, pool.DefaultMaxRegression,
+					best.RunID, best.CandidateID, primary, cmp.OldMean, cmp.NewMean)
+				fmt.Fprintf(os.Stderr, "promptopt run: 候选池退化预警：本次 %s=%.4f 低于池内历史最优 %.4f（run %s），配对自助法 CI [%.4f, %.4f] 下界超过阈值 %.2f——退化超过噪声区间\n",
+					primary, cmp.NewMean, cmp.OldMean, best.RunID, cmp.Lo, cmp.Hi, pool.DefaultMaxRegression)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "promptopt run: 跨 run 样本集不同，仅均值参考（本次 %s=%.4f vs 池内最优 %.4f，run %s）\n",
+				primary, cmp.NewMean, cmp.OldMean, best.RunID)
+		}
+	}
+	if err := store.Append(o.taskKey, entry); err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: 写候选池失败: %v\n", err)
+		return warning
+	}
+	if warning != "" {
+		patchManifestPoolWarning(runDir, warning)
+	}
+	return warning
+}
+
+// patchManifestPoolWarning records the pool regression warning in the
+// already-written manifest.json (read-modify-write, the same discipline
+// as rewriteManifestRoute): the manifest snapshots the run before
+// evaluation, but the warning only exists after it.
+func patchManifestPoolWarning(runDir, warning string) {
+	path := filepath.Join(runDir, "manifest.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: 读 manifest.json 失败，pool_warning 未记录: %v\n", err)
+		return
+	}
+	var mf runManifest
+	if err := json.Unmarshal(b, &mf); err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: 解码 manifest.json 失败，pool_warning 未记录: %v\n", err)
+		return
+	}
+	mf.PoolWarning = warning
+	if err := writeJSONFile(path, mf); err != nil {
+		fmt.Fprintf(os.Stderr, "promptopt run: 写 manifest.json 失败，pool_warning 未记录: %v\n", err)
+	}
 }
 
 // startSink opens the run dir, the events.jsonl fanout and the
@@ -488,15 +830,49 @@ func startSink(o runOptions, runDir, synthDir string) (*runSink, error) {
 	if o.web {
 		sink.bus = web.NewBus()
 		sink.unhookBus = sink.fanout.subscribe(sink.bus.Publish)
-		dashboard, err := web.NewServer(o.outDir, synthDir, sink.bus).Listen(o.addr)
+		listen := o.listenAddr()
+		dashboard, err := web.NewServer(o.outDir, synthDir, sink.bus).Listen(listen)
 		if err != nil {
 			sink.close()
 			return nil, err
 		}
 		sink.dashboard = dashboard
-		fmt.Fprintf(os.Stderr, "promptopt run: dashboard at http://%s\n", o.addr)
+		fmt.Fprintf(os.Stderr, "promptopt run: dashboard at http://%s/runs/<run_id>/dashboard\n", listen)
 	}
+	liveSinks.Store(sink, struct{}{})
 	return sink, nil
+}
+
+// liveSinks tracks every opened-but-unclosed runSink. The run path
+// closes its own sink on every normal and early-return path; the
+// registry exists for the MCP reuse contract「每次调用一个 sink、调用必
+// 关闭」: a panicked run unwinds without reaching those closes, and the
+// tools/call handler reclaims the orphan via closeOrphanedSinks (its
+// stop() releases the signal.NotifyContext so repeated calls never
+// accumulate signal handlers).
+var liveSinks sync.Map
+
+// countLiveSinks is the no-backlog probe: after every completed
+// tools/call optimize (and every CLI run) it reads zero.
+func countLiveSinks() int {
+	n := 0
+	liveSinks.Range(func(_, _ any) bool { n++; return true })
+	return n
+}
+
+// closeOrphanedSinks closes every sink left open by an unwound
+// (panicked) run and returns how many were reclaimed. Idempotent on
+// the normal path where the registry is already empty.
+func closeOrphanedSinks() int {
+	n := 0
+	liveSinks.Range(func(k, _ any) bool {
+		if s, ok := k.(*runSink); ok {
+			s.close()
+			n++
+		}
+		return true
+	})
+	return n
 }
 
 // runSink bundles the shared per-run plumbing: signal context, the
@@ -513,8 +889,10 @@ type runSink struct {
 
 // close tears the sink down: closing the bus ends attached SSE
 // streams once run_done has been flushed; Shutdown then waits for the
-// handlers.
+// handlers. Registry deletion first keeps close idempotent (a sink
+// reclaimed via closeOrphanedSinks after a normal close is a no-op).
 func (s *runSink) close() {
+	liveSinks.Delete(s)
 	if s.dashboard != nil {
 		s.unhookBus()
 		s.bus.Close()
@@ -527,12 +905,15 @@ func (s *runSink) close() {
 }
 
 // finishRun persists the run summary, tears down the sink and prints
-// the result per the output convention (headless: JSON on stdout).
-// opt, when non-nil, adds the optimizer's best-prompt block to the
-// human summary. With --web the dashboard stays up after the summary
-// is written until Ctrl-C: the frontier page's adopt flow needs the
-// pages (and the SSE stream) alive past run_done.
-func finishRun(o runOptions, sink *runSink, res core.RunResult, runDir, primary string, opt *engine.Result) int {
+// the result per the output convention (headless: JSON on stdout —
+// injected as out so the CLI keeps os.Stdout while the MCP surface
+// silences it; the payload's source of truth is runDir/summary.json on
+// disk either way). opt, when non-nil, adds the optimizer's
+// best-prompt block to the human summary. With --web the dashboard
+// stays up after the summary is written until Ctrl-C: the frontier
+// page's adopt flow needs the pages (and the SSE stream) alive past
+// run_done.
+func finishRun(o runOptions, sink *runSink, res core.RunResult, runDir, primary string, opt *engine.Result, out io.Writer) int {
 	// summary.json is the primary artifact (spec); run.json is written
 	// alongside with identical content as the engine-slice contract
 	// name for the run summary.
@@ -545,21 +926,175 @@ func finishRun(o runOptions, sink *runSink, res core.RunResult, runDir, primary 
 	}
 	if o.web {
 		printHumanSummary(os.Stderr, res, runDir, primary, opt)
-		fmt.Fprintf(os.Stderr, "promptopt run: 看板驻留中（http://%s），可在前沿看板采纳候选，Ctrl-C 退出\n", o.addr)
+		printRunConclusion(os.Stderr, o, res, runDir, primary, opt)
+		fmt.Fprintf(os.Stderr, "promptopt run: 看板驻留中（http://%s/runs/%s/dashboard），可在前沿看板采纳候选，Ctrl-C 退出\n",
+			o.listenAddr(), res.RunID)
 		<-sink.ctx.Done()
 		sink.close()
 		return res.ExitCode
 	}
 	sink.close()
 	if o.headless {
-		if err := json.NewEncoder(os.Stdout).Encode(res); err != nil {
+		if err := json.NewEncoder(out).Encode(res); err != nil {
 			fmt.Fprintf(os.Stderr, "promptopt run: encode summary: %v\n", err)
 			return exitFailure
 		}
+		// --headless 只约束 stdout（纯 JSON 摘要）；stderr 沿用
+		// pool/warn 提示的先例继续承载人类可读结论（CI 日志可见）。
+		printRunConclusion(os.Stderr, o, res, runDir, primary, opt)
 		return res.ExitCode
 	}
 	printHumanSummary(os.Stderr, res, runDir, primary, opt)
+	printRunConclusion(os.Stderr, o, res, runDir, primary, opt)
 	return res.ExitCode
+}
+
+// printRunConclusion renders the command-line conclusion block (P10
+// 命令行结论呈现): the best candidate, the primary Δ with its delivery
+// confidence verdict (paired bootstrap over the frontier's fixed-order
+// rows — 提案 §1.1 C 层交付标注), the verify gate's three-state result
+// read from the latest verify.json (or the 未过门禁 guidance) and the
+// verify/adopt next steps with the dashboard address. Human modes only;
+// the headless stdout JSON summary stays byte-clean. The exit-code
+// contract (0/1/2/3) is carried by the caller, never by this block.
+func printRunConclusion(w io.Writer, o runOptions, res core.RunResult, runDir, primary string, opt *engine.Result) {
+	fmt.Fprintln(w, "--- run 结论 ---")
+	if opt != nil && primary != "" {
+		line := fmt.Sprintf("最优候选: %s · %s %.4f", opt.Best.ID, primary, opt.BestMeans[primary])
+		if v := deliveryVerdict(opt, runDir, primary); v != "" {
+			line += "（" + v + "）"
+		}
+		fmt.Fprintln(w, line)
+	} else {
+		fmt.Fprintf(w, "候选: %s · %s %.4f（手动模式无优化交付，无 Δ/置信判定）\n",
+			res.CandidateID, cmp.Or(primary, "primary"), res.MetricMeans[primary])
+	}
+	// Gate line: the latest verify.json three-state result, or the
+	// 未过门禁 guidance (a manual run has no frontier artifacts, so
+	// verify cannot gate it — say so instead of pointing at a command
+	// that would fail).
+	if rep, ok := readLatestVerifyReport(runDir); ok {
+		fmt.Fprintf(w, "门禁: %s\n", verifyGateLine(rep))
+	} else if opt == nil {
+		fmt.Fprintln(w, "门禁: 未过门禁——手动模式无 frontier 工件，verify 门禁不适用")
+	} else {
+		fmt.Fprintf(w, "门禁: 未过门禁——运行 promptopt verify %s 出具三态结论（退出码 0 通过 / 3 回归）\n", res.RunID)
+	}
+	if o.web {
+		fmt.Fprintf(w, "看板: http://%s/runs/%s/dashboard（总览顶部横幅渲染同一门禁结论）\n", o.listenAddr(), res.RunID)
+	} else {
+		fmt.Fprintf(w, "看板: promptopt serve --runs-dir %s 后访问 /runs/%s/dashboard\n", o.outDir, res.RunID)
+	}
+}
+
+// deliveryVerdict computes the delivered best's confidence verdict from
+// the fixed-order per-sample rows: Δ = 最优−基线, and the paired
+// bootstrap CI runs over D = 基线−最优 (verify's regression
+// convention) with the shared stats implementation and the pool's
+// 0.05 threshold (提案 §1.1 C 层交付标注). The best row lives on the
+// frontier; the baseline row falls back to lineage.json because strict
+// dominance EVICTS the baseline member from the frontier exactly when
+// the delivery story is best. Returns "" when the rows are missing or
+// mismatched — the annotation is evidence, never invented.
+func deliveryVerdict(opt *engine.Result, runDir, primary string) string {
+	var base, best []float64
+	for _, m := range opt.Frontier {
+		switch {
+		case m.Operator == engine.OpBaseline:
+			base = m.Scores
+		case m.ID() == opt.Best.ID:
+			best = m.Scores
+		}
+	}
+	if len(base) == 0 {
+		if lin, err := engine.LoadOrInitLineage(filepath.Join(runDir, "lineage.json")); err == nil {
+			for _, rec := range lin.Records() {
+				if rec.Operator == engine.OpBaseline {
+					base = rec.Scores
+					break
+				}
+			}
+		}
+	}
+	if len(base) == 0 || len(base) != len(best) {
+		return ""
+	}
+	// Δ from the rows themselves (mean of 最优−基线): self-consistent
+	// with the CI input and independent of the member Means, which are
+	// unreachable once the baseline was evicted.
+	delta := 0.0
+	for i := range best {
+		delta += best[i] - base[i]
+	}
+	delta /= float64(len(best))
+	lo, hi := stats.PairedBootstrapCI(base, best, pool.BootstrapResamples, stats.NewBootstrapRNG())
+	switch stats.BootstrapVerdict(lo, hi, pool.DefaultMaxRegression) {
+	case stats.CIConfidentPass:
+		return fmt.Sprintf("Δ %+.4f · 配对自助法 CI [%.4f, %.4f] B=%d → 置信通过：提升超出噪声区间",
+			delta, lo, hi, pool.BootstrapResamples)
+	case stats.CIRegressed:
+		return fmt.Sprintf("Δ %+.4f · 配对自助法 CI [%.4f, %.4f] B=%d → 回归：退化超过噪声区间",
+			delta, lo, hi, pool.BootstrapResamples)
+	default:
+		return fmt.Sprintf("Δ %+.4f · 配对自助法 CI [%.4f, %.4f] B=%d → 不可判定：差异未超噪声区间，样本量不足",
+			delta, lo, hi, pool.BootstrapResamples)
+	}
+}
+
+// verifyGateLine renders the latest verify.json's three-state result
+// for the conclusion block (the same conclusion the dashboard banner
+// renders).
+func verifyGateLine(rep verifyReport) string {
+	if ci := rep.Regression.CI; ci != nil {
+		switch ci.Verdict {
+		case ciConfidentPass:
+			return fmt.Sprintf("置信通过（%s Δ %.4f，CI [%.4f, %.4f] B=%d 上界 ≤ 0，提升可信；退出码 %d）",
+				rep.Primary, rep.Regression.Delta, ci.Lo, ci.Hi, ci.B, rep.ExitCode)
+		case ciRegressed:
+			return fmt.Sprintf("回归（%s Δ %.4f，CI [%.4f, %.4f] B=%d 下界超阈值 %.2f，退化超过噪声区间；退出码 %d）",
+				rep.Primary, rep.Regression.Delta, ci.Lo, ci.Hi, ci.B, rep.Regression.Threshold, rep.ExitCode)
+		default:
+			return fmt.Sprintf("不可判定（%s Δ %.4f，CI [%.4f, %.4f] B=%d 跨越阈值——差异未超噪声区间，样本量不足；退出码 %d 但不构成回归背书）",
+				rep.Primary, rep.Regression.Delta, ci.Lo, ci.Hi, ci.B, rep.ExitCode)
+		}
+	}
+	switch {
+	case rep.ExitCode == exitBudgetExhausted:
+		return fmt.Sprintf("证据不完整（存在未派发样本，回归结论不可得；退出码 %d）", rep.ExitCode)
+	case rep.ExitCode == exitFailure:
+		return fmt.Sprintf("验证评估失败（无有效结论；退出码 %d）", rep.ExitCode)
+	case rep.Regression.Regressed:
+		return fmt.Sprintf("回归（%s Δ %.4f 超过阈值 %.2f，均值差判定；退出码 %d）",
+			rep.Primary, rep.Regression.Delta, rep.Regression.Threshold, rep.ExitCode)
+	default:
+		return fmt.Sprintf("通过（%s Δ %.4f 在阈值 %.2f 内，均值差判定未跑 CI；退出码 %d）",
+			rep.Primary, rep.Regression.Delta, rep.Regression.Threshold, rep.ExitCode)
+	}
+}
+
+// readLatestVerifyReport loads the newest runs/<id>/verify/<ts>/
+// verify.json (timestamp directories sort lexicographically
+// newest-first); ok=false when the run has not been verified yet.
+func readLatestVerifyReport(runDir string) (verifyReport, bool) {
+	entries, err := os.ReadDir(filepath.Join(runDir, "verify"))
+	if err != nil {
+		return verifyReport{}, false
+	}
+	slices.SortFunc(entries, func(a, b os.DirEntry) int { return strings.Compare(b.Name(), a.Name()) })
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(runDir, "verify", e.Name(), "verify.json"))
+		if err != nil {
+			continue
+		}
+		var rep verifyReport
+		if json.Unmarshal(b, &rep) == nil {
+			return rep, true
+		}
+	}
+	return verifyReport{}, false
 }
 
 // parseRunFlags parses and validates the run flag surface. Environment
@@ -569,17 +1104,20 @@ func finishRun(o runOptions, sink *runSink, res core.RunResult, runDir, primary 
 // before or after it.
 func parseRunFlags(args []string) (runOptions, error) {
 	var o runOptions
-	addrSet, optimizerSet, evoVariantSet := false, false, false
+	addrSet, portSet, optimizerSet, evoVariantSet := false, false, false, false
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&o.taskPath, "task", "", "task YAML path (required without a positional prompt)")
 	fs.StringVar(&o.candidatePath, "candidate", "", "candidate YAML path (required without a positional prompt)")
 	fs.StringVar(&o.datasetPath, "dataset", "", "dataset YAML path (required without a positional prompt)")
 	fs.StringVar(&o.split, "split", "", "dataset split to evaluate (default: all)")
+	fs.StringVar(&o.taskKey, "task-key", "", "stable anchor-library key (default: zero-config = first 12 hex of the prompt sha256; configured mode = task file stem; snapshot into manifest.task_key for verify --promote/--anchor-lib)")
 	fs.StringVar(&o.baseURL, "base-url", "", "OpenAI-compatible base URL (env PROMPTOPT_BASE_URL)")
 	fs.StringVar(&o.model, "model", "", "model name (env PROMPTOPT_MODEL)")
 	fs.StringVar(&o.apiKey, "api-key", "", "API key (env PROMPTOPT_API_KEY, default \"1\")")
 	fs.IntVar(&o.maxTokens, "max-tokens", config.DefaultMaxTokens, "max completion tokens per request")
+	fs.Float64Var(&o.temperature, "temperature", 0, "executor sampling temperature 0..2 (0 = field omitted, gateway default takes over; judge stays deterministic; noise magnitude unmeasured)")
+	fs.IntVar(&o.reps, "reps", 1, "sampling repetitions per sample (each rep costs one evaluation and its executor budget; applies to evaluation units, zero-config baseline and manual runs; soft-stop accounting unchanged)")
 	fs.IntVar(&o.budgetTokens, "budget-tokens", 0, "executor token budget, prompt+completion (0 = unlimited)")
 	fs.IntVar(&o.budgetEvals, "budget-evals", 0, "max executor evaluations (0 = unlimited)")
 	fs.IntVar(&o.workers, "workers", config.DefaultWorkers, "parallel evaluation workers")
@@ -593,10 +1131,26 @@ func parseRunFlags(args []string) (runOptions, error) {
 	fs.Int64Var(&o.budgetOptTokens, "budget-opt-tokens", 0, "optimizer token budget, cumulative (0 = unlimited)")
 	fs.StringVar(&o.optimizer, "optimizer", config.DefaultOptimizer, "optimizer paradigm: a registered name or auto (zero-config mode; see docs/plugins.md)")
 	fs.StringVar(&o.providerName, "provider", config.DefaultProvider, "LLM provider backend (openai|anthropic)")
+	fs.Float64Var(&o.rps, "rps", 0, "client-side request pacing, requests per second (0 = off; applies per provider client, executor and a dedicated judge instance each)")
+	var rawTimeout string
+	fs.StringVar(&rawTimeout, "timeout", "", "per-attempt provider timeout: Go duration like 90s / 2m30s, or bare seconds like 300 (env PROMPTOPT_TIMEOUT; default 180s; applies per provider client, executor, judge and decision judge alike)")
+	var rawExtraBody string
+	fs.StringVar(&rawExtraBody, "extra-body", "", "gateway-private JSON object merged onto the request body top level, e.g. '{\"chat_template_kwargs\":{\"enable_thinking\":false}}' (parameter shape varies per gateway/model)")
+	fs.StringVar(&o.judgeProvider, "judge-provider", "", "dedicated judge provider backend for llm_judge (openai|anthropic; empty = reuse --provider)")
+	fs.StringVar(&o.judgeBaseURL, "judge-base-url", "", "judge API base URL (env PROMPTOPT_JUDGE_BASE_URL; empty = reuse --base-url)")
+	fs.StringVar(&o.judgeModel, "judge-model", "", "judge model name (env PROMPTOPT_JUDGE_MODEL; empty = reuse --model)")
+	fs.StringVar(&o.judgeAPIKey, "judge-api-key", "", "judge API key (env PROMPTOPT_JUDGE_API_KEY; empty = reuse --api-key)")
+	fs.IntVar(&o.judgeMaxTokens, "judge-max-tokens", 0, "judge completion budget (env PROMPTOPT_JUDGE_MAX_TOKENS; 0 = reuse --max-tokens; judge output is just the verdict, a small value works)")
+	fs.StringVar(&o.judgeBackend, "judge-backend", "", "llm_judge backend: llm (generative judge, default) or decision (SystemOne decision-model cascade, per-sample fallback to the generative judge)")
+	fs.StringVar(&o.judgeDecisionURL, "judge-decision-url", "", "decision-model service base URL (env PROMPTOPT_JUDGE_DECISION_URL; the client posts to <url>/v1/systemone; required with --judge-backend decision)")
+	fs.StringVar(&o.judgeDecisionModel, "judge-decision-model", "", "decision model name (env PROMPTOPT_JUDGE_DECISION_MODEL; required with --judge-backend decision)")
+	fs.Float64Var(&o.judgeDecisionConfidence, "judge-decision-confidence", 0, "decision cascade: fall back to the generative judge when confidence < threshold (0 = default 0.5; tcmsp-30 实测 tev1:0.8b confidence 低至 0.21/0.111)")
+	fs.Float64Var(&o.judgeDecisionDiagBelow, "judge-decision-diag-below", 0, "decision cascade: fetch the Chinese diagnosis from the generative judge when the normalized score < line (0 = default 0.6; the decision model covers the score half of the judge contract only)")
 	fs.StringVar(&o.evoVariant, "evo-variant", config.DefaultEvoVariant, "evoprompt variant: ga|de (requires --optimizer evoprompt)")
 	fs.BoolVar(&o.interactive, "interactive", false, "pause at the synthesis checkpoint for manual review (zero-config mode)")
 	fs.StringVar(&o.outDir, "out", "", "run output directory (env PROMPTOPT_OUT, default runs/)")
-	fs.StringVar(&o.addr, "addr", config.DefaultAddr, "dashboard listen address (requires --web)")
+	fs.StringVar(&o.addr, "addr", config.DefaultAddr, "dashboard listen address (host or host:port; implies dashboard; combine host-only with --port)")
+	fs.IntVar(&o.port, "port", 0, "dashboard listen port when --addr is host-only (default 17700; implies dashboard; a full host:port --addr rejects --port)")
 	fs.BoolVar(&o.web, "web", false, "serve a live SSE dashboard during the run")
 	fs.BoolVar(&o.headless, "headless", false, "print only the JSON run summary")
 	// The stdlib flag package stops parsing at the first positional,
@@ -606,10 +1160,26 @@ func parseRunFlags(args []string) (runOptions, error) {
 	if err := fs.Parse(flagsFirst(fs, args)); err != nil {
 		return o, err
 	}
+	// --extra-body must parse as a JSON object up front: failing before
+	// the synthesis pipeline runs beats burning its budget on a typo.
+	extraBody, err := parseExtraBody(rawExtraBody)
+	if err != nil {
+		return o, err
+	}
+	o.extraBody = extraBody
+	// --timeout parses strictly (flag side); env resolution happens
+	// after, without failing runs over a malformed optional env.
+	o.timeout, err = config.ParseTimeout(rawTimeout)
+	if err != nil {
+		return o, fmt.Errorf("--timeout: %w", err)
+	}
+	o.timeout = config.Timeout(o.timeout)
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "addr":
 			addrSet = true
+		case "port":
+			portSet = true
 		case "optimizer":
 			optimizerSet = true
 		case "evo-variant":
@@ -638,6 +1208,35 @@ func parseRunFlags(args []string) (runOptions, error) {
 	}
 	if o.providerName != "openai" && o.providerName != "anthropic" {
 		errs = append(errs, fmt.Errorf("--provider must be openai or anthropic, got %q", o.providerName))
+	}
+	// The task key names a library directory — reject path traversal
+	// before anything is written under it.
+	if o.taskKey != "" {
+		if err := anchors.ValidateTaskKey(o.taskKey); err != nil {
+			errs = append(errs, fmt.Errorf("--task-key: %w", err))
+		}
+	}
+	// The judge provider mirrors the --provider whitelist up front so a
+	// typo fails before the synthesis pipeline burns its budget.
+	if o.judgeProvider != "" && o.judgeProvider != "openai" && o.judgeProvider != "anthropic" {
+		errs = append(errs, fmt.Errorf("--judge-provider must be openai or anthropic, got %q", o.judgeProvider))
+	}
+	if o.judgeMaxTokens < 0 {
+		errs = append(errs, fmt.Errorf("--judge-max-tokens must be zero (reuse --max-tokens) or positive, got %d", o.judgeMaxTokens))
+	}
+	switch o.judgeBackend {
+	case "", eval.JudgeBackendLLM, eval.JudgeBackendDecision:
+	default:
+		errs = append(errs, fmt.Errorf("--judge-backend must be %s or %s, got %q", eval.JudgeBackendLLM, eval.JudgeBackendDecision, o.judgeBackend))
+	}
+	if o.judgeDecisionConfidence < 0 || o.judgeDecisionConfidence > 1 {
+		errs = append(errs, fmt.Errorf("--judge-decision-confidence must be within [0, 1] (0 = default), got %v", o.judgeDecisionConfidence))
+	}
+	if o.judgeDecisionDiagBelow < 0 || o.judgeDecisionDiagBelow > 1 {
+		errs = append(errs, fmt.Errorf("--judge-decision-diag-below must be within [0, 1] (0 = default), got %v", o.judgeDecisionDiagBelow))
+	}
+	if o.rps < 0 {
+		errs = append(errs, fmt.Errorf("--rps must be zero (off) or positive, got %v", o.rps))
 	}
 	if o.evoVariant != "ga" && o.evoVariant != "de" {
 		errs = append(errs, fmt.Errorf("--evo-variant must be ga or de, got %q", o.evoVariant))
@@ -680,11 +1279,28 @@ func parseRunFlags(args []string) (runOptions, error) {
 	if o.interactive && o.headless {
 		errs = append(errs, errors.New("--interactive and --headless are mutually exclusive"))
 	}
-	if addrSet && !o.web {
-		errs = append(errs, errors.New("--addr only takes effect together with --web"))
+	// Dashboard address surface (P10 方案 a): a full host:port --addr
+	// wins as-is and cannot combine with --port; a host-only --addr
+	// pairs with --port; either flag given implies the dashboard, so
+	// both are mutually exclusive with --headless (the old "addr
+	// requires --web" guard is gone — -addr and --addr are the same
+	// flag and the bare-host form must start the dashboard).
+	if addrSet && portSet {
+		if _, _, err := net.SplitHostPort(o.addr); err == nil {
+			errs = append(errs, fmt.Errorf("--addr %q already carries a port and cannot combine with --port (use a host-only --addr with --port)", o.addr))
+		}
+	}
+	if (addrSet || portSet) && o.headless {
+		errs = append(errs, errors.New("--addr/--port 任一显式给定即隐含起看板，与 --headless 互斥（--headless 无看板）"))
 	}
 	if o.maxTokens <= 0 {
 		errs = append(errs, fmt.Errorf("--max-tokens must be positive, got %d", o.maxTokens))
+	}
+	if o.temperature < 0 || o.temperature > 2 {
+		errs = append(errs, fmt.Errorf("--temperature must be within [0, 2], got %v", o.temperature))
+	}
+	if o.reps < 1 {
+		errs = append(errs, fmt.Errorf("--reps must be >= 1, got %d", o.reps))
 	}
 	if o.budgetTokens < 0 || o.budgetEvals < 0 {
 		errs = append(errs, errors.New("budgets must be zero (unlimited) or positive"))
@@ -726,7 +1342,57 @@ func parseRunFlags(args []string) (runOptions, error) {
 	}
 	o.apiKey = config.APIKey(o.apiKey)
 	o.outDir = config.OutDir(o.outDir)
+	// Judge surface resolves flag > PROMPTOPT_JUDGE_* env; per-field
+	// fallback to the executor values happens later — inside
+	// eval.Engine for provider/model/tokens, at the dedicated-provider
+	// construction for base URL and API key. The parsed values stay
+	// "as configured" here so the manifest snapshot records exactly
+	// what the user set (nothing appears when nothing was set).
+	o.judgeProvider = config.JudgeProvider(o.judgeProvider)
+	o.judgeBaseURL = config.JudgeBaseURL(o.judgeBaseURL)
+	o.judgeModel = config.JudgeModel(o.judgeModel)
+	o.judgeAPIKey = config.JudgeAPIKey(o.judgeAPIKey)
+	o.judgeMaxTokens = config.JudgeMaxTokens(o.judgeMaxTokens)
+	// Decision surface (P7): only the connection fields carry an env
+	// fallback; the completeness check runs after the merge so an
+	// env-provided URL/model counts.
+	o.judgeDecisionURL = config.JudgeDecisionURL(o.judgeDecisionURL)
+	o.judgeDecisionModel = config.JudgeDecisionModel(o.judgeDecisionModel)
+	if o.judgeBackend == eval.JudgeBackendDecision && (o.judgeDecisionURL == "" || o.judgeDecisionModel == "") {
+		errs = append(errs, errors.New("--judge-backend decision requires --judge-decision-url and --judge-decision-model (or their PROMPTOPT_JUDGE_DECISION_* env)"))
+	}
+	// Explicit --addr/--port implies the dashboard (equivalent to
+	// --web; a plain --web run is unchanged). Recorded even when other
+	// validation failed — the caller exits on error without using o.
+	o.addrSet, o.portSet = addrSet, portSet
+	o.web = o.web || addrSet || portSet
 	return o, errors.Join(errs...)
+}
+
+// listenAddr resolves the dashboard listen address from the --addr/
+// --port pair (P10 方案 a; parseRunFlags already rejected the
+// conflicting full-address+--port combination): a full host:port
+// address wins as-is (现状不变，端口不被拆丢), a bare host combines
+// with --port (default 17700), the port flag alone binds loopback, and
+// neither flag leaves the historical default byte-identical.
+func (o runOptions) listenAddr() string {
+	return resolveListenAddr(o.addr, o.addrSet, o.portSet, o.port)
+}
+
+// parseExtraBody decodes the --extra-body flag value into the map
+// merged onto the wire payload top level. An empty value means unset;
+// anything that is not a JSON object (including arrays and scalars) is
+// a usage error — the merge contract operates on the object's keys.
+func parseExtraBody(raw string) (map[string]any, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return nil, fmt.Errorf("--extra-body must be a JSON object, got %q: %v", raw, err)
+	}
+	return m, nil
 }
 
 // flagsFirst reorders command-line arguments so all flags precede
@@ -783,17 +1449,26 @@ type runManifest struct {
 	TaskPath      string    `json:"task_path,omitempty"`
 	CandidatePath string    `json:"candidate_path,omitempty"`
 	DatasetPath   string    `json:"dataset_path,omitempty"`
-	Model         string    `json:"model"`
-	BaseURL       string    `json:"base_url"`
-	MaxTokens     int       `json:"max_tokens"`
-	Workers       int       `json:"workers"`
-	BudgetTokens  int64     `json:"budget_tokens"`
-	BudgetEvals   int64     `json:"budget_evals"`
-	Samples       int       `json:"samples,omitempty"`
-	Mode          string    `json:"mode,omitempty"`
-	Prompt        string    `json:"prompt,omitempty"`
-	SynthSamples  int       `json:"synth_samples,omitempty"`
-	ProbeVariants int       `json:"probe_variants,omitempty"`
+	// TaskKey is the anchor-library key (V7 §1.2): verify --promote and
+	// --anchor-lib resolve it from this snapshot; omitted in legacy
+	// artifacts where it was never recorded.
+	TaskKey      string `json:"task_key,omitempty"`
+	Model        string `json:"model"`
+	BaseURL      string `json:"base_url"`
+	MaxTokens    int    `json:"max_tokens"`
+	Workers      int    `json:"workers"`
+	BudgetTokens int64  `json:"budget_tokens"`
+	BudgetEvals  int64  `json:"budget_evals"`
+	// Executor statistical knobs: temperature 0 keeps the field off
+	// the wire (gateway default), reps 1 is single sampling — both
+	// omitted so legacy manifests read unchanged.
+	Temperature   float64 `json:"temperature,omitempty"`
+	Reps          int     `json:"reps,omitempty"`
+	Samples       int     `json:"samples,omitempty"`
+	Mode          string  `json:"mode,omitempty"`
+	Prompt        string  `json:"prompt,omitempty"`
+	SynthSamples  int     `json:"synth_samples,omitempty"`
+	ProbeVariants int     `json:"probe_variants,omitempty"`
 	// Optimizer routing: the initial snapshot carries the requested
 	// --optimizer value; resolveOptimizer rewrites the final paradigm,
 	// the request and the route reason once the retained set is known.
@@ -802,6 +1477,39 @@ type runManifest struct {
 	OptimizerRouteReason string `json:"optimizer_route_reason,omitempty"`
 	Provider             string `json:"provider,omitempty"`
 	EvoVariant           string `json:"evo_variant,omitempty"`
+	// Outbound pacing and gateway-private extras (V7 §2.2): omitted
+	// entirely when unset so legacy manifests read unchanged.
+	// extra_body is also the run-level audit anchor for the flag (the
+	// per-call trace records the same map under extra_body).
+	// timeout_seconds snapshots an explicitly configured per-attempt
+	// provider deadline (--timeout / PROMPTOPT_TIMEOUT, in seconds);
+	// 0 (the 180s default) omits — verify replays the same deadline.
+	RPS            float64        `json:"rps,omitempty"`
+	ExtraBody      map[string]any `json:"extra_body,omitempty"`
+	TimeoutSeconds int            `json:"timeout_seconds,omitempty"`
+	// Judge surface snapshot (V7 裁判隔离): exactly what the user set
+	// for the optional second judge LLM — omitted entirely when nothing
+	// was configured, so legacy manifests read unchanged. The judge API
+	// key never persists here.
+	JudgeProvider  string `json:"judge_provider,omitempty"`
+	JudgeBaseURL   string `json:"judge_base_url,omitempty"`
+	JudgeModel     string `json:"judge_model,omitempty"`
+	JudgeMaxTokens int    `json:"judge_max_tokens,omitempty"`
+	// Decision-model judge surface (P7 级联): the decision backend and
+	// its connection/thresholds, so verify reproduces the run's judge
+	// backend. Thresholds snapshot as configured (0 = the eval-package
+	// defaults, omitted by omitempty — same "0 = default" semantics at
+	// every layer).
+	JudgeBackend            string  `json:"judge_backend,omitempty"`
+	JudgeDecisionURL        string  `json:"judge_decision_url,omitempty"`
+	JudgeDecisionModel      string  `json:"judge_decision_model,omitempty"`
+	JudgeDecisionConfidence float64 `json:"judge_decision_confidence,omitempty"`
+	JudgeDecisionDiagBelow  float64 `json:"judge_decision_diag_below,omitempty"`
+	// PoolWarning is the cross-run candidate pool's degradation warning
+	// (提案 §3.3 最小版): set only when the same-set paired bootstrap
+	// regressed against the pool's historical best — first runs and
+	// different-set mean-only comparisons stay silent on the manifest.
+	PoolWarning string `json:"pool_warning,omitempty"`
 	// GEPA engine settings (zero-config mode only; seed always records
 	// the derived actual value when --seed 0).
 	MaxRounds       int     `json:"max_rounds,omitempty"`
@@ -1016,7 +1724,7 @@ func printHumanSummary(w io.Writer, res core.RunResult, runDir, primary string, 
 	if len(parts) > 0 {
 		fmt.Fprintf(w, "metrics:  %s\n", strings.Join(parts, "  "))
 	}
-	for _, role := range []core.Role{core.RoleExecutor, core.RoleOptimizer} {
+	for _, role := range []core.Role{core.RoleExecutor, core.RoleJudge, core.RoleOptimizer} {
 		if u, ok := res.UsageByRole[role]; ok {
 			fmt.Fprintf(w, "usage[%s]: prompt=%d completion=%d total=%d\n",
 				role, u.PromptTokens, u.CompletionTokens, u.Total())

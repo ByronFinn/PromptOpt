@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PromptOpt 看板 · 重设计原型（评审稿）</title>
+<style>
+/* ============ 设计令牌（Data-Dense Dashboard / density 9） ============ */
+:root{
+  --bg:#F8FAFC; --card:#FFFFFF; --fg:#1E3A8A; --fg-strong:#0F2547;
+  --muted:#475569; --muted-bg:#E9EEF6; --border:#DBEAFE; --border-strong:#B9CBE8;
+  --primary:#1E40AF; --secondary:#3B82F6; --accent:#D97706; --accent-ink:#B45309;
+  --danger:#DC2626; --ok:#15803D; --warn-bg:#FFF7E8;
+  --radius:10px; --radius-sm:6px;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:20px; --space-6:24px; --space-7:32px;
+  --mono:ui-monospace,"SF Mono","Fira Code",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 var(--sans);
+  font-variant-numeric:tabular-nums}
+.num{font-family:var(--mono)}
+a{color:var(--primary)}
+:focus-visible{outline:2px solid var(--secondary);outline-offset:2px;border-radius:4px}
+button{font:inherit;cursor:pointer}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  html{scroll-behavior:auto}
+}
+
+/* ============ 顶栏 ============ */
+.topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:var(--space-4);
+  background:#0F2547;color:#fff;padding:0 var(--space-6);height:52px;
+  box-shadow:0 1px 0 rgba(255,255,255,.08)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.02em}
+.brand svg{flex:none}
+.brand small{font-weight:400;color:#B9CBE8}
+.run-pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.10);
+  border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:3px 12px;
+  font-size:12.5px;color:#DBEAFE}
+.dot{width:8px;height:8px;border-radius:50%;background:#34D399;display:inline-block}
+.dot.run{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.tabs{display:flex;gap:2px;margin-left:auto}
+.tab{background:none;border:0;color:#B9CBE8;padding:6px 14px;border-radius:8px 8px 0 0;
+  border-bottom:2px solid transparent;font-size:13.5px}
+.tab:hover{color:#fff;background:rgba(255,255,255,.08)}
+.tab[aria-selected="true"]{color:#fff;border-bottom-color:#F59E0B;font-weight:600}
+.proto-badge{margin-left:var(--space-4);background:#92400E;color:#FEF3C7;font-size:11.5px;
+  border:1px solid #B45309;border-radius:999px;padding:2px 10px;white-space:nowrap}
+
+/* ============ 布局 ============ */
+main{max-width:1240px;margin:0 auto;padding:var(--space-6) var(--space-6) var(--space-7)}
+.view{display:none}
+.view.active{display:block;animation:fadein .18s ease-out}
+@keyframes fadein{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}
+.view-head{display:flex;align-items:baseline;gap:var(--space-4);flex-wrap:wrap;margin:var(--space-2) 0 var(--space-5)}
+.view-head h1{font-size:19px;margin:0;color:var(--fg-strong)}
+.view-head p{margin:0;color:var(--muted);font-size:13px}
+.grid{display:grid;gap:var(--space-4)}
+.cols-4{grid-template-columns:repeat(4,1fr)}
+.cols-2{grid-template-columns:1.35fr 1fr}
+.cols-trace{grid-template-columns:230px 1fr 1fr}
+@media (max-width:1000px){.cols-4{grid-template-columns:repeat(2,1fr)}.cols-2,.cols-trace{grid-template-columns:1fr}}
+
+/* ============ 卡片与徽标 ============ */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:var(--space-4) var(--space-5)}
+.card h2{font-size:13px;margin:0 0 var(--space-3);color:var(--muted);
+  font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.card h2 .spacer{margin-left:auto}
+.stat{display:flex;flex-direction:column;gap:2px}
+.stat .label{font-size:12px;color:var(--muted)}
+.stat .value{font-size:26px;font-weight:700;color:var(--fg-strong);font-family:var(--mono)}
+.stat .sub{font-size:12px;color:var(--muted)}
+.delta-up{color:var(--ok);font-weight:600}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;border-radius:999px;
+  padding:1px 8px;border:1px solid var(--border-strong);background:var(--muted-bg);
+  color:var(--muted);font-weight:500;vertical-align:middle}
+.badge-v7{background:var(--warn-bg);border-color:#F0C36D;color:var(--accent-ink)}
+.badge-ok{background:#EAF7EE;border-color:#9BD3AC;color:var(--ok)}
+.badge-gray{background:#EEF2F7;border-color:#C9D4E2;color:var(--muted)}
+.badge-danger{background:#FDECEC;border-color:#F1A9A9;color:var(--danger)}
+
+/* ============ 表格 / 热力表 ============ */
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--border)}
+th{font-size:12px;color:var(--muted);font-weight:600;background:#F4F8FD;white-space:nowrap}
+td.num,th.num{text-align:right;font-family:var(--mono)}
+tbody tr:hover{background:#F6FAFF}
+.heat td{font-family:var(--mono);text-align:center}
+.heat th{text-align:center}
+.heat .rowhead{text-align:left;font-family:var(--sans)}
+.heat .cell{position:relative}
+.heat .sd{display:block;font-size:10.5px;color:var(--muted);line-height:1.2}
+.heat .win{outline:2px solid var(--ok);outline-offset:-2px;border-radius:4px}
+.heat .near-noise{text-decoration:underline dotted var(--accent);text-underline-offset:3px}
+.heat tfoot td{background:#F4F8FD;font-weight:600;border-top:2px solid var(--border-strong)}
+.legend{display:flex;gap:var(--space-5);flex-wrap:wrap;font-size:12px;color:var(--muted);
+  margin-top:var(--space-3)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.swatch{width:22px;height:12px;border-radius:3px;border:1px solid var(--border-strong);display:inline-block}
+
+/* ============ 进度条 / 仪表 ============ */
+.meter{margin:6px 0 2px}
+.meter .bar{height:8px;background:var(--muted-bg);border-radius:4px;overflow:hidden}
+.meter .fill{height:100%;background:var(--secondary);border-radius:4px}
+.meter .fill.warn{background:var(--accent)}
+.meter .cap{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin-top:2px}
+
+/* ============ 事件流 ============ */
+.feed{display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto;
+  padding-right:4px;min-height:220px}
+.evt{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;
+  border:1px solid var(--border);border-left:3px solid var(--secondary);
+  border-radius:var(--radius-sm);padding:7px 10px;background:#fff;font-size:12.5px}
+.evt t{color:var(--muted);font-size:11px;font-family:var(--mono)}
+.evt .body{color:var(--fg)}
+.evt.new{animation:slidein .25s ease-out}
+@keyframes slidein{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.feed-tools{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.btn{border:1px solid var(--border-strong);background:#fff;color:var(--fg);
+  border-radius:var(--radius-sm);padding:5px 12px;font-size:12.5px;display:inline-flex;
+  align-items:center;gap:6px;transition:background .15s,border-color .15s}
+.btn:hover{background:#F1F6FE;border-color:var(--secondary)}
+.btn-primary{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+.btn-primary:hover{background:#1B369C}
+.btn-primary[disabled]{background:#9DB2D9;border-color:#9DB2D9;cursor:not-allowed}
+.btn-ghost{border-color:transparent;background:none;color:var(--primary)}
+.empty{border:1px dashed var(--border-strong);border-radius:var(--radius-sm);
+  color:var(--muted);padding:var(--space-3);font-size:12.5px;background:#FBFCFE}
+
+/* ============ 图表 ============ */
+.chart-wrap{overflow-x:auto}
+svg text{font-family:var(--sans)}
+svg .axis{font-size:11px;fill:var(--muted)}
+svg .gridline{stroke:#E3ECF7;stroke-width:1}
+svg .series-label{font-size:12px;font-weight:600}
+
+/* ============ trace / diff ============ */
+.side-list{display:flex;flex-direction:column;gap:6px}
+.pick{border:1px solid var(--border);background:#fff;border-radius:var(--radius-sm);
+  padding:8px 10px;text-align:left;display:flex;justify-content:space-between;gap:8px;
+  align-items:center;transition:border-color .15s}
+.pick:hover{border-color:var(--secondary)}
+.pick[aria-pressed="true"]{border-color:var(--primary);background:#F0F5FF;font-weight:600}
+.pick .sc{font-family:var(--mono);font-size:12px;color:var(--muted)}
+pre{margin:0;white-space:pre-wrap;word-break:break-word;font:12.5px/1.6 var(--mono);
+  background:#FBFCFE;border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:var(--space-3);color:#24344D}
+pre .ins{background:#E4F6E9;text-decoration:none;border-radius:3px}
+pre .del{background:#FDE4E4;border-radius:3px}
+pre .reasoning{color:var(--muted)}
+details>summary{cursor:pointer;font-size:12.5px;color:var(--muted);margin:8px 0}
+.rep-strip{display:flex;gap:6px;align-items:flex-end;height:44px;padding:4px 0}
+.rep-strip .rep{width:34px;background:var(--secondary);border-radius:3px 3px 0 0;position:relative}
+.rep-strip .rep span{position:absolute;top:-16px;left:0;right:0;text-align:center;
+  font-size:10.5px;font-family:var(--mono);color:var(--muted)}
+.score-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)}
+.score-item{border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px}
+.score-item .k{font-size:11.5px;color:var(--muted)}
+.score-item .v{font-size:17px;font-weight:700;font-family:var(--mono);color:var(--fg-strong)}
+
+/* ============ 结论横幅 ============ */
+.verdict{display:flex;gap:var(--space-4);align-items:center;border-radius:var(--radius);
+  padding:var(--space-4) var(--space-5);border:1px solid #9BD3AC;background:#EAF7EE;margin-bottom:var(--space-4)}
+.verdict.inconclusive{border-color:#C9D4E2;background:#EEF2F7}
+.verdict.regress{border-color:#F1A9A9;background:#FDECEC}
+.verdict .icon{flex:none}
+.verdict h3{margin:0 0 2px;font-size:15.5px}
+.verdict p{margin:0;font-size:12.5px;color:#33534A}
+.verdict.inconclusive p{color:var(--muted)}
+.verdict.regress p{color:#7A1F1F}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 14px;font-size:12.5px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;font-family:var(--mono)}
+.exit-codes td:first-child{font-family:var(--mono);font-weight:700}
+.note{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.6}
+hr.sep{border:0;border-top:1px solid var(--border);margin:var(--space-4) 0}
+footer{max-width:1240px;margin:0 auto;padding:var(--space-5) var(--space-6);
+  color:var(--muted);font-size:12px;border-top:1px solid var(--border)}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 17c3-6 5-9 8-9s5 3 8 9" stroke="#F59E0B" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="12" cy="17" r="2.4" fill="#3B82F6"/>
+    </svg>
+    PromptOpt <small>看板</small>
+  </div>
+  <span class="run-pill"><span class="dot run" aria-hidden="true"></span>
+    <span class="num">20260930-142100-3e7c91a2</span> · tcm_ner_extraction</span>
+  <nav class="tabs" role="tablist" aria-label="看板视图">
+    <button class="tab" role="tab" aria-selected="true"  aria-controls="view-overview" id="tab-overview">① 总览监控</button>
+    <button class="tab" role="tab" aria-selected="false" aria-controls="view-frontier" id="tab-frontier">② 前沿与采纳</button>
+    <button class="tab" role="tab" aria-selected="false" aria-controls="view-trace"   id="tab-trace">③ 样本证据</button>
+    <button class="tab" role="tab" aria-selected="false" aria-controls="view-verify"  id="tab-verify">④ 交付门禁</button>
+  </nav>
+  <span class="proto-badge">设计原型 · 演示数据 · 评审稿</span>
+</header>
+
+<main>
+
+<!-- ================= 视图① 总览监控 ================= -->
+<section class="view active" id="view-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
+  <div class="view-head">
+    <h1>Run 总览</h1>
+    <p>优化进行中 · 第 5/5 轮 · GEPA 反思进化 · executor <span class="num">jiuwei-tcm</span> @ 192.168.56.39:59001 · workers 4 · reps <span class="num">3</span></p>
+  </div>
+
+  <div class="grid cols-4">
+    <div class="card stat">
+      <span class="label">主指标 f1（均值 ± 标准差，reps=3）</span>
+      <span class="value">0.789 <small style="font-size:13px;color:var(--muted)">±0.041</small></span>
+      <span class="sub">基线 0.620 → <span class="delta-up num">Δ +0.169</span>
+        <span class="badge badge-v7">V7 · CI [+0.09, +0.24]</span></span>
+    </div>
+    <div class="card stat">
+      <span class="label">约束指标 json_validator</span>
+      <span class="value">1.00</span>
+      <span class="sub">基线 0.83 · 确定性硬检查，不进支配排序</span>
+    </div>
+    <div class="card stat">
+      <span class="label">token 预算（executor / 判分）</span>
+      <div class="meter"><div class="bar"><div class="fill" style="width:77%"></div></div>
+        <div class="cap"><span>46,280 / 60,000</span><span>77%</span></div></div>
+      <span class="sub">判分（RoleJudge）<span class="num">—</span> · 本任务未声明 llm_judge
+        <span class="badge badge-v7">V7 · 角色单列</span></span>
+    </div>
+    <div class="card stat">
+      <span class="label">评估次数 / 用时</span>
+      <div class="meter"><div class="bar"><div class="fill" style="width:80%"></div></div>
+        <div class="cap"><span>96 / 120</span><span>80%</span></div></div>
+      <span class="sub">进行中 41m 12s · 失败样本 0 · 未派发 0</span>
+    </div>
+  </div>
+
+  <div class="grid cols-2" style="margin-top:16px">
+    <div class="card">
+      <h2>轮次趋势 · 每轮最优 f1
+        <span class="spacer"></span>
+        <span class="badge">现状</span><span class="badge badge-v7">V7 · 误差条</span>
+      </h2>
+      <div class="chart-wrap">
+      <svg viewBox="0 0 640 250" width="100%" role="img"
+           aria-label="折线图：基线 f1 恒为 0.620（虚线）；每轮最优从 0.635 升至 0.789（实线），误差条为 reps=3 的标准差，第 4 轮停滞触发 Fresh 重启">
+        <!-- 网格与轴 -->
+        <line class="gridline" x1="50" y1="30" x2="620" y2="30"/><text class="axis" x="16" y="34">1.00</text>
+        <line class="gridline" x1="50" y1="90"  x2="620" y2="90"/><text class="axis" x="16" y="94">0.80</text>
+        <line class="gridline" x1="50" y1="150" x2="620" y2="150"/><text class="axis" x="16" y="154">0.60</text>
+        <line class="gridline" x1="50" y1="210" x2="620" y2="210"/><text class="axis" x="16" y="214">0.40</text>
+        <text class="axis" x="300" y="240">优化轮次</text>
+        <!-- 基线（虚线灰） -->
+        <line x1="50" y1="138" x2="620" y2="138" stroke="#94A3B8" stroke-width="2" stroke-dasharray="6 4"/>
+        <text class="series-label" x="528" y="130" fill="#64748B">基线 0.620</text>
+        <!-- 每轮最优（实线蓝）+ 误差条 -->
+        <!-- y = 270 - v*240: .635→117.6  .658→112.1  .712→99.1  .691→104.2  .789→80.6 -->
+        <g stroke="#1E40AF" stroke-width="2" fill="none">
+          <path d="M60 118 L180 112 L300 99 L420 104 L560 81"/>
+        </g>
+        <!-- 误差条 ±sd -->
+        <g stroke="#1E40AF" stroke-width="1.5">
+          <line x1="60"  y1="108" x2="60"  y2="128"/><line x1="55" y1="108" x2="65" y2="108"/><line x1="55" y1="128" x2="65" y2="128"/>
+          <line x1="180" y1="101" x2="180" y2="123"/><line x1="175" y1="101" x2="185" y2="101"/><line x1="175" y1="123" x2="185" y2="123"/>
+          <line x1="300" y1="88"  x2="300" y2="110"/><line x1="295" y1="88"  x2="305" y2="88"/><line x1="295" y1="110" x2="305" y2="110"/>
+          <line x1="420" y1="94"  x2="420" y2="115"/><line x1="415" y1="94"  x2="425" y2="94"/><line x1="415" y1="115" x2="425" y2="115"/>
+          <line x1="560" y1="70"  x2="560" y2="91"/><line x1="555" y1="70"  x2="565" y2="70"/><line x1="555" y1="91" x2="565" y2="91"/>
+        </g>
+        <g fill="#1E40AF">
+          <circle cx="60" cy="118" r="4"/><circle cx="180" cy="112" r="4"/><circle cx="300" cy="99" r="4"/>
+          <circle cx="420" cy="104" r="4" fill="#fff" stroke="#1E40AF" stroke-width="2"/>
+          <circle cx="560" cy="81" r="5"/>
+        </g>
+        <text class="series-label" x="470" y="60" fill="#1E40AF">每轮最优 0.789</text>
+        <text class="axis" x="400" y="126">第4轮停滞（Fresh 重启）</text>
+        <text class="axis" x="56" y="34">基线</text>
+        <text class="axis" x="176" y="34">R1</text><text class="axis" x="296" y="34">R2</text>
+        <text class="axis" x="416" y="34">R3</text><text class="axis" x="556" y="34">R4</text>
+      </svg>
+      </div>
+      <details><summary>数据表（图表替代文本）</summary>
+        <table><thead><tr><th>轮次</th><th class="num">最优 f1</th><th class="num">±sd</th><th class="num">事件</th></tr></thead>
+        <tbody>
+          <tr><td>基线</td><td class="num">0.620</td><td class="num">±0.048</td><td>—</td></tr>
+          <tr><td>R1</td><td class="num">0.635</td><td class="num">±0.044</td><td>变异提议 ×2</td></tr>
+          <tr><td>R2</td><td class="num">0.658</td><td class="num">±0.046</td><td>反思提议 ×1</td></tr>
+          <tr><td>R3</td><td class="num">0.712</td><td class="num">±0.046</td><td>假设命中</td></tr>
+          <tr><td>R4</td><td class="num">0.691</td><td class="num">±0.044</td><td>停滞 → Fresh 重启</td></tr>
+          <tr><td>R5</td><td class="num">0.789</td><td class="num">±0.041</td><td>反思 + 跃升</td></tr>
+        </tbody></table>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>实时事件流（SSE）<span class="spacer"></span><span class="badge">现状</span></h2>
+      <div class="feed-tools">
+        <button class="btn" id="pause-btn" aria-pressed="false">
+          <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="3.6" height="10" fill="currentColor"/><rect x="7.2" y="1" width="3.6" height="10" fill="currentColor"/></svg>
+          暂停滚动
+        </button>
+        <span style="font-size:12px;color:var(--muted)">演示：每 2.5s 模拟一条 <code class="num">sample_done</code></span>
+      </div>
+      <div class="feed" id="feed" aria-live="polite" aria-label="实时事件">
+        <div class="evt"><t>14:52:08</t><span class="body"><b>round_done</b> R5 · 最优 f1 0.789（c-r5-reflect 进入前沿）</span><t>2.1k tok</t></div>
+        <div class="evt"><t>14:51:44</t><span class="body"><b>sample_done</b> dev-006 · f1 0.71 / json ✓ · 10.4s</span><t>—</t></div>
+        <div class="evt"><t>14:51:31</t><span class="body"><b>sample_done</b> dev-005 · f1 0.82 / json ✓ · 9.8s</span><t>—</t></div>
+        <div class="evt" style="border-left-color:var(--accent)"><t>14:51:02</t><span class="body"><b>frontier_add</b> c-r5-reflect 准入，逐样本优势均超噪声余量 ε</span><t>—</t></div>
+        <div class="evt"><t>14:50:47</t><span class="body"><b>sample_done</b> dev-004 · f1 0.79 / json ✓ · 10.1s</span><t>—</t></div>
+      </div>
+      <hr class="sep">
+      <div class="empty">失败样本：无 · 因预算未派发：无 —— 若出现将在此列出样本 ID 与错误摘录，并按退出码契约预告（2=预算耗尽 &gt; 1=评估失败）。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 视图② 前沿与采纳 ================= -->
+<section class="view" id="view-frontier" role="tabpanel" aria-labelledby="tab-frontier" tabindex="0">
+  <div class="view-head">
+    <h1>帕累托前沿与采纳</h1>
+    <p>6 个 dev 样本 × 前沿 4 候选 · 单元格 = 逐样本 f1 均值（reps=3）± 标准差 · 绿框 = 该样本最优 · 虚线下划 = 差异在噪声余量 ε=0.05 内</p>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h2>采纳决策<span class="spacer"></span>
+      <span class="badge badge-v7">V7 · 噪声感知准入</span><span class="badge">现状 · adopt 端点</span></h2>
+    <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+      <div class="kv" style="flex:1;min-width:280px">
+        <dt>交付候选</dt><dd>c-r5-reflect（R5 · GEPA 反思 · 约束 json_validator 1.00 达标）</dd>
+        <dt>vs 基线</dt><dd class="delta-up">f1 +0.169 · CI [+0.09, +0.24]（证据充分）</dd>
+        <dt>成本</dt><dd>741 tok/样本（基线 612）· P50 10.2s</dd>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:stretch">
+        <button class="btn btn-primary" id="adopt-btn">
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6l3.5 3.5L11 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+          采纳该候选
+        </button>
+        <a class="btn" href="#" id="goto-verify">先过 verify 门禁（推荐）</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>前沿热力表<span class="spacer"></span><span class="badge">现状</span><span class="badge badge-v7">V7 · ±sd / ε 余量 / ε-clone</span></h2>
+    <div class="chart-wrap">
+    <table class="heat">
+      <thead><tr>
+        <th class="rowhead">样本</th>
+        <th>baseline<br><small style="font-weight:400">基线</small></th>
+        <th>c-r3-mut<br><small style="font-weight:400">R3 · 变异</small></th>
+        <th>c-r4-hypo<br><small style="font-weight:400">R4 · 假设</small></th>
+        <th>c-r5-reflect<br><small style="font-weight:400">R5 · 反思 · 均值最优</small></th>
+      </tr></thead>
+      <tbody>
+        <tr><th class="rowhead">dev-001</th>
+          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.92</span><span class="sd">±0.03</span></td>
+          <td class="cell">0.78<span class="sd">±0.05</span></td>
+          <td class="cell">0.66<span class="sd">±0.06</span></td>
+          <td class="cell">0.85<span class="sd">±0.04</span></td></tr>
+        <tr><th class="rowhead">dev-002</th>
+          <td class="cell">0.38<span class="sd">±0.07</span></td>
+          <td class="cell">0.71<span class="sd">±0.05</span></td>
+          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.90</span><span class="sd">±0.03</span></td>
+          <td class="cell">0.76<span class="sd">±0.05</span></td></tr>
+        <tr><th class="rowhead">dev-003</th>
+          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.85</span><span class="sd">±0.04</span></td>
+          <td class="cell">0.69<span class="sd">±0.06</span></td>
+          <td class="cell">0.55<span class="sd">±0.08</span></td>
+          <td class="cell">0.80<span class="sd">±0.04</span></td></tr>
+        <tr><th class="rowhead">dev-004</th>
+          <td class="cell">0.42<span class="sd">±0.08</span></td>
+          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.83</span><span class="sd">±0.04</span></td>
+          <td class="cell">0.79<span class="sd">±0.05</span></td>
+          <td class="cell near-noise">0.79<span class="sd">±0.04</span></td></tr>
+        <tr><th class="rowhead">dev-005</th>
+          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.88</span><span class="sd">±0.03</span></td>
+          <td class="cell">0.74<span class="sd">±0.05</span></td>
+          <td class="cell">0.61<span class="sd">±0.07</span></td>
+          <td class="cell">0.82<span class="sd">±0.04</span></td></tr>
+        <tr><th class="rowhead">dev-006</th>
+          <td class="cell">0.27<span class="sd">±0.06</span></td>
+          <td class="cell">0.58<span class="sd">±0.06</span></td>
+          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.84</span><span class="sd">±0.04</span></td>
+          <td class="cell">0.71<span class="sd">±0.05</span></td></tr>
+      </tbody>
+      <tfoot>
+        <tr><td>f1 均值</td><td class="num">0.620</td><td class="num">0.722</td><td class="num">0.725</td><td class="num" style="color:var(--primary)">0.789</td></tr>
+        <tr><td>json_validator（约束）</td><td class="num">0.83</td><td class="num">1.00</td><td class="num">0.83</td><td class="num">1.00</td></tr>
+        <tr><td>token/样本 · P50 延迟</td><td class="num">612 · 8.9s</td><td class="num">705 · 9.4s</td><td class="num">668 · 9.1s</td><td class="num">741 · 10.2s</td></tr>
+        <tr><td>准入方式</td><td>初始</td><td>严格支配准入</td><td>ε 余量准入 <span class="badge badge-v7">V7</span></td><td>ε 余量准入 <span class="badge badge-v7">V7</span></td></tr>
+      </tfoot>
+    </table>
+    </div>
+    <div class="legend">
+      <span><span class="swatch" style="background:#1E40AF"></span>f1 高</span>
+      <span><span class="swatch" style="background:#93B8F0"></span>f1 中</span>
+      <span><span class="swatch" style="background:#EDF3FC"></span>f1 低</span>
+      <span><span class="swatch" style="outline:2px solid var(--ok);outline-offset:-1px"></span>该样本最优</span>
+      <span style="text-decoration:underline dotted var(--accent);text-underline-offset:3px">差异 ≤ ε（噪声内，不可判优劣）</span>
+    </div>
+    <p class="note">说明：颜色仅为扫读辅助，精确比较始终以单元格数字为准（无障碍要求不以颜色为唯一载体）。约束指标（json_validator）不参与帕累托支配排序，仅作为 Best 候选的硬过滤条件——这就是 c-r4-hypo 虽在前沿、却被排除出交付推荐的原因。</p>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2>谱系（lineage）<span class="spacer"></span><span class="badge">现状</span></h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:12.5px">
+      <span class="badge badge-gray">baseline</span>
+      <svg width="16" height="10" aria-hidden="true"><path d="M0 5h12M8 1l4 4-4 4" stroke="#94A3B8" fill="none" stroke-width="1.5"/></svg>
+      <span class="badge badge-gray">R1 变异 ×2（均被支配，淘汰）</span>
+      <svg width="16" height="10" aria-hidden="true"><path d="M0 5h12M8 1l4 4-4 4" stroke="#94A3B8" fill="none" stroke-width="1.5"/></svg>
+      <span class="badge badge-gray">R2 反思（淘汰）</span>
+      <svg width="16" height="10" aria-hidden="true"><path d="M0 5h12M8 1l4 4-4 4" stroke="#94A3B8" fill="none" stroke-width="1.5"/></svg>
+      <span class="badge">c-r3-mut 进前沿</span>
+      <svg width="16" height="10" aria-hidden="true"><path d="M0 5h12M8 1l4 4-4 4" stroke="#94A3B8" fill="none" stroke-width="1.5"/></svg>
+      <span class="badge">c-r4-hypo 进前沿</span>
+      <svg width="16" height="10" aria-hidden="true"><path d="M0 5h12M8 1l4 4-4 4" stroke="#94A3B8" fill="none" stroke-width="1.5"/></svg>
+      <span class="badge badge-ok">c-r5-reflect 进前沿 · 均值最优</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 视图③ 样本证据 ================= -->
+<section class="view" id="view-trace" role="tabpanel" aria-labelledby="tab-trace" tabindex="0">
+  <div class="view-head">
+    <h1>样本证据下钻</h1>
+    <p>选中候选 c-r5-reflect · dev-004（该候选相对最弱样本——审查最弱处比看均值更能暴露风险）</p>
+  </div>
+
+  <div class="grid cols-trace">
+    <div class="card">
+      <h2>样本选择</h2>
+      <div class="side-list" role="group" aria-label="样本列表">
+        <button class="pick" aria-pressed="false"><span>dev-001</span><span class="sc">f1 0.85</span></button>
+        <button class="pick" aria-pressed="false"><span>dev-002</span><span class="sc">f1 0.76</span></button>
+        <button class="pick" aria-pressed="false"><span>dev-003</span><span class="sc">f1 0.80</span></button>
+        <button class="pick" aria-pressed="true"><span>dev-004</span><span class="sc">f1 0.79</span></button>
+        <button class="pick" aria-pressed="false"><span>dev-005</span><span class="sc">f1 0.82</span></button>
+        <button class="pick" aria-pressed="false"><span>dev-006</span><span class="sc">f1 0.71</span></button>
+      </div>
+      <hr class="sep">
+      <div class="kv">
+        <dt>输入</dt><dd>118 字 · 病案文本</dd>
+        <dt>期望</dt><dd>5 实体（证候×1 方剂×1 症状×3）</dd>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>提示词（与基线 diff）<span class="spacer"></span><span class="badge">现状 · trace/diff</span></h2>
+<pre>你是中医病案信息抽取助手。从 {input} 中抽取结构化实体。
+<ins>仅输出一个 JSON 对象，键为 syndromes / prescriptions / symptoms，值为字符串数组。</ins>
+<ins>证候名须为规范术语（参考《中医临床诊疗术语》），不得输出原文短语的口语化变体。</ins>
+<del>把找到的所有信息都列出来。</del>
+<ins>若某类实体不存在，输出空数组。不要输出任何解释。</ins></pre>
+      <details><summary>展开完整提示词（54 行）</summary><pre>你是中医病案信息抽取助手。从 {input} 中抽取结构化实体。
+仅输出一个 JSON 对象，键为 syndromes / prescriptions / symptoms，值为字符串数组。
+证候名须为规范术语（参考《中医临床诊疗术语》），不得输出原文短语的口语化变体。
+若某类实体不存在，输出空数组。不要输出任何解释。</pre></details>
+      <hr class="sep">
+      <h2>模型响应</h2>
+<pre>{
+  "syndromes":    ["肝肾阴虚证"],
+  "prescriptions": ["六味地黄丸"],
+  "symptoms":     ["眩晕", "耳鸣", "腰膝酸软"]
+}</pre>
+      <details><summary>推理过程（reasoning，812 tok）——长文本默认折叠</summary>
+<pre class="reasoning">先定位证候描述「眩晕耳鸣、腰膝酸软三月余」……
+「六味地黄丸」为方剂名，归 prescriptions……</pre></details>
+    </div>
+
+    <div class="card">
+      <h2>评分与重复采样<span class="spacer"></span><span class="badge badge-v7">V7 · reps/±sd</span></h2>
+      <div class="score-grid">
+        <div class="score-item"><div class="k">f1（3 次采样均值）</div>
+          <div class="v">0.79 <small style="font-size:12px;color:var(--muted)">±0.04</small></div></div>
+        <div class="score-item"><div class="k">json_validator</div><div class="v">1.00 ✓</div></div>
+        <div class="score-item"><div class="k">延迟 / tokens</div>
+          <div class="v" style="font-size:14px">10.1s · 748</div></div>
+        <div class="score-item"><div class="k">裁判诊断</div>
+          <div class="v" style="font-size:13px;color:var(--muted)">未声明 llm_judge</div></div>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:12px 0 4px">逐次采样分数（reps）：</p>
+      <div class="rep-strip" role="img" aria-label="三次采样 f1 分别为 0.83、0.79、0.75，均值 0.79">
+        <div class="rep" style="height:83%"><span>0.83</span></div>
+        <div class="rep" style="height:79%"><span>0.79</span></div>
+        <div class="rep" style="height:75%"><span>0.75</span></div>
+      </div>
+      <div class="empty" style="margin-top:14px">基线同样本 f1 = 0.42 ±0.08（本候选在该样本提升 +0.37，超出噪声余量 ε=0.05）。</div>
+      <hr class="sep">
+      <h2>错误样本时……</h2>
+      <div class="empty">失败样本会显示错误摘录与重试记录（429/5xx 指数退避 ×4），此处演示空态。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 视图④ 交付门禁 ================= -->
+<section class="view" id="view-verify" role="tabpanel" aria-labelledby="tab-verify" tabindex="0">
+  <div class="view-head">
+    <h1>verify 交付门禁</h1>
+    <p>采纳候选 c-r5-reflect vs 基线 · 真实锚点集 5 条（anchors/tcm-ner/，confirmed）· 两侧同集 reps=3 · 配对自助法 B=1000</p>
+  </div>
+
+  <div class="verdict">
+    <svg class="icon" width="34" height="34" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" stroke="#15803D" stroke-width="2"/>
+      <path d="M7.5 12.5l3 3 6-6.5" stroke="#15803D" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <h3>置信通过 —— 提升超出噪声区间，证据充分</h3>
+      <p>f1 配对差分 CI 上界 ≤ 0（提升可信）；json_validator 硬检查 100% 通过（确定性，不走 CI）。退出码 0。</p>
+    </div>
+  </div>
+
+  <div class="grid cols-2">
+    <div class="card">
+      <h2>配对差分 · f1<span class="spacer"></span><span class="badge badge-v7">V7 · 配对自助法 CI</span></h2>
+      <div class="chart-wrap">
+      <svg viewBox="0 0 560 130" width="100%" role="img"
+           aria-label="置信区间图：Δ=基线减交付均值-0.152，95% CI [-0.24, -0.06]，区间整体在零线左侧，判定为置信通过">
+        <line class="gridline" x1="40" y1="60" x2="530" y2="60"/>
+        <!-- x 轴：-0.35 → +0.35 映射到 40 → 530；x = 285 + v*700 -->
+        <line x1="285" y1="18" x2="285" y2="100" stroke="#64748B" stroke-width="1.5"/>
+        <text class="axis" x="281" y="114">0</text>
+        <line x1="250" y1="18" x2="250" y2="100" stroke="#D97706" stroke-width="1.5" stroke-dasharray="5 4"/>
+        <text class="axis" x="222" y="114">-0.05 阈值</text>
+        <text class="axis" x="40" y="114">-0.35</text><text class="axis" x="505" y="114">+0.35</text>
+        <text class="axis" x="40" y="34" style="font-size:10.5px">← 交付更优</text>
+        <text class="axis" x="462" y="34" style="font-size:10.5px">交付更差 →</text>
+        <!-- CI 区间 [-0.24,-0.06] → x 117..203 -->
+        <line x1="117" y1="60" x2="203" y2="60" stroke="#15803D" stroke-width="6" stroke-linecap="round"/>
+        <circle cx="178.6" cy="60" r="6" fill="#0F2547"/>
+        <text x="117" y="42" style="font-size:12px;font-weight:600" fill="#15803D">CI [-0.24, -0.06] · 上界 ≤ 0</text>
+        <text x="117" y="92" class="axis">均值 Δ = -0.152（f1 提升 +0.152）· n=5 锚点 · reps=3 · B=1000</text>
+      </svg>
+      </div>
+      <table style="margin-top:8px">
+        <thead><tr><th>锚点样本</th><th class="num">基线 f1</th><th class="num">交付 f1</th><th class="num">D = 基线−交付</th></tr></thead>
+        <tbody>
+          <tr><td class="num">anchor-01</td><td class="num">0.61</td><td class="num">0.92</td><td class="num" style="color:var(--ok)">-0.31</td></tr>
+          <tr><td class="num">anchor-02</td><td class="num">0.55</td><td class="num">0.73</td><td class="num" style="color:var(--ok)">-0.18</td></tr>
+          <tr><td class="num">anchor-03</td><td class="num">0.78</td><td class="num">0.87</td><td class="num" style="color:var(--ok)">-0.09</td></tr>
+          <tr><td class="num">anchor-04</td><td class="num">0.90</td><td class="num">0.86</td><td class="num" style="color:var(--danger)">+0.04</td></tr>
+          <tr><td class="num">anchor-05</td><td class="num">0.66</td><td class="num">0.88</td><td class="num" style="color:var(--ok)">-0.22</td></tr>
+        </tbody>
+      </table>
+      <p class="note">anchor-04 单点轻微退化为噪声区间内的正常波动——这正是配对差分的价值：样本难度在差分中抵消，判定由整组 CI 而非单点做出。</p>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>对照：不可判定态长什么样<span class="spacer"></span><span class="badge badge-v7">V7 · 三态门禁</span></h2>
+        <div class="chart-wrap">
+        <svg viewBox="0 0 520 118" width="100%" role="img"
+             aria-label="对照示例：CI [-0.03, +0.05] 跨越零线与阈值，判定为不可判定，样本量不足">
+          <line x1="30" y1="52" x2="500" y2="52" class="gridline"/>
+          <line x1="265" y1="14" x2="265" y2="88" stroke="#64748B" stroke-width="1.5"/><text class="axis" x="262" y="104">0</text>
+          <line x1="230" y1="14" x2="230" y2="88" stroke="#D97706" stroke-width="1.5" stroke-dasharray="5 4"/><text class="axis" x="204" y="104">-0.05</text>
+          <line x1="244" y1="52" x2="300" y2="52" stroke="#64748B" stroke-width="6" stroke-linecap="round"/>
+          <circle cx="272" cy="52" r="5" fill="#475569"/>
+          <text x="244" y="36" style="font-size:12px;font-weight:600" fill="#475569">CI [-0.03, +0.05] · 跨零 → 不可判定</text>
+          <text x="244" y="82" class="axis">退出码 0，但报告强制标注「差异未超噪声区间，样本量不足」</text>
+        </svg>
+        </div>
+        <p class="note" style="margin-top:4px">三态视觉语言：<b style="color:var(--ok)">通过</b>（区间整体在阈值左侧）/ <b style="color:var(--danger)">回归</b>（CI 下界 &gt; 阈值，退出码 3）/ <b style="color:var(--muted)">不可判定</b>（灰，诚实报告而非假自信）。锚点库（<span class="num">anchors/&lt;task-key&gt;/</span>）的价值正在于把不可判定收窄成可判定。</p>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h2>采纳与回退<span class="spacer"></span><span class="badge">现状 · rollback/审计</span></h2>
+        <div class="kv">
+          <dt>当前采纳</dt><dd>c-r5-reflect（adopted.json）</dd>
+          <dt>采纳历史</dt><dd>1 次采纳 · 0 次回退（adopted-history.jsonl）</dd>
+          <dt>完整审计</dt><dd><code class="num">promptopt replay &lt;run_id&gt;</code> 时间线</dd>
+        </div>
+        <div class="empty" style="margin-top:10px">回退入口：发现线上退化时执行 <code class="num">promptopt rollback &lt;run_id&gt;</code>，历史追加写入，不覆盖。</div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h2>退出码契约</h2>
+        <table class="exit-codes">
+          <tbody>
+            <tr><td>0</td><td>成功（含「不可判定」——证据不足不是失败）</td></tr>
+            <tr><td>1</td><td>评估失败或用法错误</td></tr>
+            <tr><td>2</td><td>预算耗尽（优先于 1）</td></tr>
+            <tr><td>3</td><td>verify 回归或约束违反（CI 下界超阈值）</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <b>评审说明</b>：本页为 PromptOpt 看板重设计原型，静态演示数据（贴合 tcm_ner_extraction 场景与 jiuwei-tcm 后端）。
+  徽标 <span class="badge">现状</span> = 仓库已上线能力；<span class="badge badge-v7">V7</span> = 路线图提案能力（reps/±sd、配对自助法 CI、噪声感知准入、RoleJudge、三态门禁）——原型先行验证其信息呈现，落地随 V7 立项。
+  已对齐的无障碍基线：非仅色指示（数字+形状+文字）、键盘可导航、可见焦点、<code class="num">prefers-reduced-motion</code> 降级、图表附数据表替代文本。
+</footer>
+
+<script>
+/* 视图切换（roving tablist） */
+const tabs=[...document.querySelectorAll('.tab')];
+function select(tab){
+  tabs.forEach(t=>{
+    const on=t===tab;
+    t.setAttribute('aria-selected',on);
+    document.getElementById(t.getAttribute('aria-controls')).classList.toggle('active',on);
+  });
+  document.getElementById(tab.getAttribute('aria-controls')).focus();
+}
+tabs.forEach((t,i)=>{
+  t.addEventListener('click',()=>select(t));
+  t.addEventListener('keydown',e=>{
+    if(e.key!=='ArrowRight'&&e.key!=='ArrowLeft')return;
+    e.preventDefault();
+    const n=(i+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length;
+    tabs[n].focus();select(tabs[n]);
+  });
+});
+document.getElementById('goto-verify').addEventListener('click',e=>{
+  e.preventDefault();select(tabs[3]);
+});
+
+/* 演示事件流（可暂停；reduced-motion 时不自动滚动） */
+const feed=document.getElementById('feed');
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let paused=false,seq=0;
+const samples=['dev-001','dev-002','dev-003','dev-004','dev-005','dev-006'];
+const btn=document.getElementById('pause-btn');
+btn.addEventListener('click',()=>{
+  paused=!paused;
+  btn.setAttribute('aria-pressed',String(paused));
+  btn.lastChild.textContent=paused?' 恢复滚动':' 暂停滚动';
+});
+function tick(){
+  if(!paused&&feed){
+    const s=samples[seq++%samples.length];
+    const f1=(0.7+Math.random()*0.2).toFixed(2);
+    const el=document.createElement('div');
+    el.className='evt'+(reduced?'':' new');
+    el.innerHTML='<t>'+new Date().toTimeString().slice(0,8)+'</t>'+
+      '<span class="body"><b>sample_done</b> '+s+' · f1 '+f1+' / json ✓ · '+(9+Math.random()*2).toFixed(1)+'s</span><t>—</t>';
+    feed.prepend(el);
+    while(feed.children.length>9)feed.lastChild.remove();
+  }
+}
+if(!reduced)setInterval(tick,2500);
+
+/* 采纳按钮演示 */
+const adopt=document.getElementById('adopt-btn');
+adopt.addEventListener('click',()=>{
+  adopt.disabled=true;
+  adopt.innerHTML='已采纳 c-r5-reflect（写入 adopted.json）';
+});
+</script>
+</body>
+</html>
