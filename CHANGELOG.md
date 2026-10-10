@@ -20,7 +20,7 @@ v1（Python）时代的代码归档于 tag `v0.1-python`，不在本日志追溯
 - 跨 run 候选池与退化预警：`pool/<task-key>/pool.jsonl` 追加制，同集（ID + input_hash 双一致）配对自助法对照，下界超阈值 stderr 中文预警 + manifest `pool_warning`。
 - `mcp` 子命令：MCP 单机 API 面——stdio JSON-RPC 三工具 optimize/verify/runs（协议取舍见 docs/mcp.md）。
 - Web 看板四视图 1:1 重构（`/runs/{id}/dashboard` + 五数据端点）、`--addr`/`--port` 分立参数（显式任一即隐含起看板）、run 结束中文结论块、SSE 实时事件流。
-- **配置面（[PRD-0001](docs/prd/PRD-0001-config-guidance.md)）**：YAML 配置文件层——`--config`/`PROMPTOPT_CONFIG` 四层发现序、22 环境身份键、单一解析链（run/mcp：flag > env > 文件 > 默认；verify 连接身份白名单补位、行为键不补位）、10 键显式性标记（显式 flag 含显式 0 终判压过文件）；`promptopt config` 子命令——init 九问向导（非 tty 行协议、stdin `-` 密钥前置读取、非 tty 无 `--force` 拒绝覆盖）/list 逐键来源与遮蔽可见性（人类 stderr、`--headless` JSON stdout）/get/set（仅单键校验、`-` 整读 stdin）/unset（幂等）；写侧安全闸（0600/0700、api_key 恒掩码、project 作用域幂等追加 .gitignore、宽松权限位运算告警）；run/verify 缺 base_url/model 报错升级为三/四途径指路、decision 缺参加 config 键指引（退出码 1）。
+- **配置面（[PRD-0001](docs/prd/PRD-0001-config-guidance.md)）**：YAML 配置文件层——`--config`/`PROMPTOPT_CONFIG` 四层发现序、22 环境身份键、单一解析链（run/mcp：flag > env > 文件 > 默认；verify 连接身份白名单补位、行为键不补位）、10 键显式性标记（显式 flag 含显式 0 终判压过文件）；`promptopt config` 子命令——init 九问向导（非 tty 行协议、stdin `-` 密钥前置读取、非 tty 无 `--force` 拒绝覆盖）/list 逐键来源与遮蔽可见性（人类 stderr、`--headless` JSON stdout）/get/set（仅单键校验、`-` 整读 stdin）/unset（幂等）；写侧安全闸（0600/0700、api_key 恒掩码、project 作用域幂等追加 .gitignore、宽松权限位运算告警）；run/verify 缺 base_url/model 报错升级为三/四途径指路、decision 缺参加 config 键指引（退出码 1）；`--spec-metrics` 钉死零配置合成规格的指标（仅零配置模式合法、逐项注册指标校验、显式空 = 交还 LLM 自选；config 键 `spec_metrics` 同链生效、覆盖先于样本合成、manifest 快照）；只读设置引导页 `GET /settings`（run --web 发布合并快照优先 / serve 回落「当前环境」链，逐键来源与 `config list` 同一收集器口径、api_key 恒掩码、缺参三途径引导，无配置写端点）。
 
 #### V6 工程化与回归门禁
 
@@ -35,6 +35,10 @@ v1（Python）时代的代码归档于 tag `v0.1-python`，不在本日志追溯
 - Release 流水线：[`.github/workflows/release.yml`](.github/workflows/release.yml)（推送 `v*` tag 触发，goreleaser 钉 v2.13.0）+ [`.goreleaser.yaml`](.goreleaser.yaml)（darwin/linux × amd64/arm64 纯 Go 单二进制 tar.gz + checksums）。
 - [`examples/json_extraction/anchor.yaml`](examples/json_extraction/anchor.yaml)：3 条人工编写样本的 `--anchor` 锚点验证集用法示例。
 - MIT `LICENSE` 落地。
+
+### Fixed
+
+- reflector 空假设池视为模型的有意义回答（PRD-0001 D9①）：空数组与全 `{input}` 字面量清洗池两形态同规——恰 1 次反思调用、0 次修复调用，不再以「响应中没有可用假设」触发修复空转；gepa 侧空池落既有跳轮分支（`vista.Record(false)` + `round_done` skipped 事件「没有可验证的假设」），全程空池以 `rounds_done` 收尾交付 baseline；修复通道从「parse+语义」缩为 parse-only（垃圾 JSON 仍恰好一次修复）；预算/取消语义零改动。
 
 ### Changed
 

@@ -52,6 +52,8 @@ export PROMPTOPT_MODEL=qwen2.5
 promptopt run "从中医病历文本中抽取症状、证型与方剂，输出 JSON" --web
 ```
 
+不想每次 `export`：`promptopt config init` 九问向导把 base_url/model/api_key 等连接参数一次性写入 YAML 配置文件（默认用户级，`--scope project` 写 `./promptopt.yaml`），`run`/`verify`/`mcp` 同链读取——详见下文「config：配置文件与必填引导」。
+
 - 默认全托管：合成 → p¹ 过滤 → 检查点自动放行 → baseline 评估 → GEPA 优化，一气呵成
 - 加 `--interactive` 则在合成集检查点暂停：浏览器打开审核页增删改样本后点"批准并继续"，或直接编辑 `synth/<run_id>/checkpoint.json`
 - 合成产物落 `synth/<run_id>/`（manifest / spec / samples / filter / checkpoint），评估与优化产物落 `runs/<run_id>/`；看板会给出审核页入口
@@ -182,6 +184,9 @@ run 结束时人类模式 stderr 输出中文结论块：最优候选 · 主指�
 | run 对比 | `/compare?a=&b=` | 两次 run 的指标均值、分角色用量、Top-1 并排对照（含 Δ 列） |
 | 优化报告 | `/runs/{id}/report` | 中文解释性报告站内渲染，下载 `report.md` 附件或自包含 `report.html` |
 | 合成集审核 | `/synth/{id}` | 零配置模式检查点：增删改合成样本、批准放行（`--interactive` 时暂停等待） |
+| 设置引导 | `/settings` | 只读配置引导页（PRD-0001 D6）：生效配置表（值+来源+flag）、必须参数状态、缺参缺口引导（见下） |
+
+设置引导页 `/settings` 两模式挂载（首页卡片可进入），**只读、无配置写端点**（改配置走 `promptopt config` 子命令）。数据源双模式各有真相：`run --web` 起看板前发布本次 run 的合并快照（含 flag 层）——「文件 0.7 + flag 显式 0」场景页面如实显示 0；serve 模式回落全局发现链 + env，页面注明语义是「当前环境」的配置（历史 run 的现场以各自 manifest 快照为准）。逐键来源标注与 `promptopt config list` 同一口径（同一个 per-key 来源收集器，页面不可能与解析链漂移）；`api_key`/`judge_api_key` 恒掩码。`base_url`/`model` 缺失时按缺口给出可复制 YAML 片段、等价命令行与环境变量三途径引导（与缺参报错指路同语义，附 `promptopt config init` 向导指引）。
 
 `promptopt serve` 用同一套页面浏览历史 run（含 events.jsonl 事件回放与 adopt 产物干预端点，但不暴露实时端点）；监听地址处置同 `run`（`-addr 127.0.0.1 -port 17000` 纯主机与分立端口组合）：
 
