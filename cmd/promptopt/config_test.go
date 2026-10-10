@@ -20,15 +20,6 @@ import (
 	"github.com/ByronFinn/PromptOpt/internal/config"
 )
 
-// withConfigStdin swaps the config subcommand's stdin injection point
-// for one test（仿 mcp 的 In 注入；测试串行执行，Cleanup 恢复）。
-func withConfigStdin(t *testing.T, s string) {
-	t.Helper()
-	old := configStdin
-	configStdin = strings.NewReader(s)
-	t.Cleanup(func() { configStdin = old })
-}
-
 // initCli runs configInit with the given stdin feed and stderr captured.
 func initCli(t *testing.T, feed string, args ...string) (int, string) {
 	t.Helper()
@@ -655,8 +646,8 @@ func TestD5MissingParamGuidance(t *testing.T) {
 func TestConfigKeyOrderMatchesRegistry(t *testing.T) {
 	typ := reflect.TypeFor[config.File]()
 	tags := make([]string, 0, typ.NumField())
-	for i := range typ.NumField() {
-		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("yaml"), ",")
+	for f := range typ.Fields() {
+		name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
 		tags = append(tags, name)
 	}
 	if !slices.Equal(tags, configKeyOrder) {

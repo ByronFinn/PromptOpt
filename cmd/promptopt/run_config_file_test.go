@@ -474,7 +474,7 @@ timeout: 90
 		mf.RPS != 2.5 || mf.JudgeMaxTokens != 256 || mf.TimeoutSeconds != 90 {
 		t.Errorf("manifest did not take the file tier: %+v", mf)
 	}
-	for _, line := range strings.Split(stderr, "\n") {
+	for line := range strings.SplitSeq(stderr, "\n") {
 		if strings.Contains(line, "file-key") {
 			t.Errorf("stderr leaked the file api_key: %s", line)
 		}

@@ -42,8 +42,8 @@ func SecretKey(key string) bool {
 var keyOrder = func() []string {
 	t := reflect.TypeFor[File]()
 	out := make([]string, 0, t.NumField())
-	for i := range t.NumField() {
-		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ","); name != "" {
+	for f := range t.Fields() {
+		if name, _, _ := strings.Cut(f.Tag.Get("yaml"), ","); name != "" {
 			out = append(out, name)
 		}
 	}

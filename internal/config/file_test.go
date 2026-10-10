@@ -459,14 +459,14 @@ func TestDeriveSources(t *testing.T) {
 func TestKeyRegistryReflection(t *testing.T) {
 	tagKeys := map[string]bool{}
 	typ := reflect.TypeFor[File]()
-	for i := range typ.NumField() {
-		name, _, _ := strings.Cut(typ.Field(i).Tag.Get("yaml"), ",")
+	for f := range typ.Fields() {
+		name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
 		if name == "" {
-			t.Fatalf("field %s lacks a yaml tag", typ.Field(i).Name)
+			t.Fatalf("field %s lacks a yaml tag", f.Name)
 		}
 		tagKeys[name] = true
 		if _, ok := keyRegistry[name]; !ok {
-			t.Errorf("File field %q (yaml %s) is missing from keyRegistry — 新增文件键忘登记（R2 #6③）", typ.Field(i).Name, name)
+			t.Errorf("File field %q (yaml %s) is missing from keyRegistry — 新增文件键忘登记（R2 #6③）", f.Name, name)
 		}
 	}
 	for key := range keyRegistry {
