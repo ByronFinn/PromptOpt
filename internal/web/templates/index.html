@@ -37,6 +37,11 @@
 <h1>PromptOpt 看板</h1>
 <p class="sub">{{if .Live}}实时评估模式：评估进行中，事件流如下{{else}}历史 run 浏览{{end}}</p>
 
+<div class="card" style="margin:.25rem 0 1rem">
+  <a href="/settings">设置与引导（/settings）</a>
+  <div class="meta">生效配置、逐键来源标注、必须参数状态与缺参指引（只读）</div>
+</div>
+
 {{if .Live}}
 <section id="live">
   <h2>实时事件流</h2>

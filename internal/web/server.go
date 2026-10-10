@@ -223,6 +223,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /static/", http.FileServerFS(staticFS))
 	s.registerDashboardRoutes(mux)
 	s.registerSynthRoutes(mux)
+	// 设置引导页（PRD-0001 切分 4 / D6）：顶层只读路由，run --web 与
+	// serve 两模式均挂载——synthDir 空 / bus nil 不影响挂载。
+	s.registerSettingsRoutes(mux)
 	if s.bus != nil {
 		mux.HandleFunc("GET /events", s.handleLiveEvents)
 	}

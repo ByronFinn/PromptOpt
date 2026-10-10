@@ -9,7 +9,10 @@
 #      trace/verify）；
 #   2. 五数据端点 200 且关键 JSON 键在位（overview/trend/heatmap/
 #      lineage/verify）；
-#   3. adopt 端点存在性（POST 未知候选 → 404，路由在而非 405）。
+#   3. adopt 端点存在性（POST 未知候选 → 404，路由在而非 405）；
+#   4. 设置引导页（PRD-0001 D6）：GET /settings 200 + serve 模式「当前
+#      环境」语义横幅 + 恒掩码 + 生效配置表；POST /settings → 405（只
+#      读，无写端点）。
 #
 # 像素级视觉复核留浏览器人工（本脚本只做结构/CSS 同源断言）。
 # 前置：先跑过至少一次 run（~/promptopt-smoke/runs/ 非）；无 run 时
@@ -38,7 +41,9 @@ if [[ "${SKIP_REMOTE:-0}" == "1" ]]; then
   echo "  BIN=$BIN RUNS_DIR=$RUNS_DIR ADDR=$ADDR PORT=$PORT"
   echo "[dry-run] 计划断言：dashboard 200 + <style> 同源锚点 + .topbar/.heat/.verdict + 四视图锚点；"
   echo "           /runs/{id}/api/{overview,trend,heatmap,lineage,verify} 200 + 关键 JSON 键；"
-  echo "           POST /runs/{id}/adopt 未知候选 → 404"
+  echo "           POST /runs/{id}/adopt 未知候选 → 404；"
+  echo "           GET /settings 200 + 当前环境语义 + ****** 掩码 + 生效配置表 + <style> 恰 1 块；"
+  echo "           POST /settings → 405（只读无写端点）"
   exit 0
 fi
 
@@ -104,6 +109,17 @@ done
 echo "[smoke] 3) adopt 端点存在性"
 code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/runs/$RUN_ID/adopt" --data 'candidate=__smoke_nonexistent__')"
 check "POST 未知候选 → 404（路由在，非 405/501）" test "$code" = "404"
+
+echo "[smoke] 4) 设置引导页 /settings（PRD-0001 D6，serve 模式回落全局链）"
+HTML="$(curl -sf "$BASE/settings")" || { echo "  FAIL: /settings 页请求失败"; exit 1; }
+check "GET /settings 200 含页面标题" grep -q "设置与引导" <<<"$HTML"
+check "serve 模式「当前环境」语义横幅" grep -q "当前环境" <<<"$HTML"
+check "api_key/judge_api_key 恒掩码（******）" grep -q '\*\*\*\*\*\*' <<<"$HTML"
+check "生效配置表在位" grep -q "生效配置" <<<"$HTML"
+check "缺口/必须参数引导在位" grep -q "必须参数" <<<"$HTML"
+check "<style> 恰 1 块（每页一块惯例）" test "$(grep -c '<style>' <<<"$HTML")" = "1"
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/settings" --data 'base_url=http://x')"
+check "POST /settings → 405（只读，无写端点）" test "$code" = "405"
 
 echo
 if [[ "$fails" -eq 0 ]]; then

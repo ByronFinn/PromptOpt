@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PromptOpt 设置与引导</title>
+<link rel="icon" href="data:,">
+<style>
+ :root{--fg:#1f2328;--dim:#6e7781;--line:#d8dee4;--bg:#f6f8fa;--card:#fff;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700}
+ *{box-sizing:border-box}
+ body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;margin:0;padding:2rem 1.25rem;background:var(--bg);color:var(--fg);line-height:1.5}
+ main{max-width:60rem;margin:0 auto}
+ h1{font-size:1.25rem;margin:0 0 .25rem}
+ h2{font-size:1rem;margin:2rem 0 .75rem}
+ .sub{color:var(--dim);font-size:.85rem;margin:0 0 1rem}
+ .banner{border:1px solid var(--line);border-radius:.5rem;padding:.6rem .9rem;font-size:.9rem;background:var(--card);margin:0 0 1rem}
+ .banner.bad{border-color:var(--bad);color:var(--bad)}
+ .cards{display:grid;gap:.75rem}
+ .card{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:.85rem 1rem}
+ .card p{margin:.5rem 0 .25rem}
+ table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:.5rem;font-size:.85rem;overflow:hidden}
+ th,td{padding:.4rem .7rem;border-top:1px solid var(--line);text-align:left;vertical-align:top}
+ thead th{border-top:none;color:var(--dim);font-weight:500;white-space:nowrap}
+ pre{background:#0d1117;color:#e6edf3;padding:.7rem .9rem;border-radius:.4rem;font-size:.8rem;overflow:auto;margin:.25rem 0 .5rem}
+ code{font-family:ui-monospace,Menlo,Consolas,monospace}
+ .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+ .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.dim{color:var(--dim)}
+ a{color:#0969da;text-decoration:none}
+ a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<main>
+<h1>设置与引导 <span class="dim mono">/settings</span></h1>
+<p class="sub">{{.Note}}</p>
+
+{{if .Error}}
+<div class="banner bad">配置文件读取失败：{{.Error}}——修复或删除该文件后刷新本页；修复前 promptopt run / verify 会因同一文件硬错退出 1。</div>
+{{else}}
+
+{{if .HitPath}}<p class="sub mono"># config: {{.HitPath}}</p>{{end}}
+{{range .Shadowed}}<p class="sub mono dim"># shadowed: {{.}}（被上述文件遮蔽，不参与生效）</p>{{end}}
+
+<h2>必须参数</h2>
+<table>
+ <thead><tr><th>键</th><th>状态</th><th>生效值</th></tr></thead>
+ <tbody>
+ {{range .Required}}<tr><td class="mono">{{.Key}}</td>{{if .OK}}<td class="ok">已配置</td><td class="mono">{{.Value}}</td>{{else}}<td class="bad">缺失</td><td class="bad">-</td>{{end}}</tr>
+ {{end}}</tbody>
+</table>
+
+{{if .Gaps}}
+<h2>缺口引导</h2>
+<p class="sub">以下必须参数未配置。三种途径任选其一（与缺参报错的指路一致）：</p>
+<div class="cards">
+{{range .Gaps}}
+ <div class="card">
+  <div><span class="mono">{{.Key}}</span> <span class="dim">flag <span class="mono">{{.Flag}}</span> · env <span class="mono">{{.EnvKey}}</span></span></div>
+  <p class="sub">① 命令行 flag：</p>
+  <pre><code>{{.Command}}</code></pre>
+  <p class="sub">② 环境变量：</p>
+  <pre><code>{{.Export}}</code></pre>
+  <p class="sub">③ 配置文件（promptopt.yaml 片段）：{{.Wizard}}</p>
+  <pre><code>{{.YAML}}</code></pre>
+ </div>
+{{end}}
+</div>
+{{end}}
+
+<h2>生效配置（{{len .Keys}} 键）</h2>
+<table>
+ <thead><tr><th>键</th><th>值</th><th>来源</th><th>flag</th></tr></thead>
+ <tbody>
+ {{range .Keys}}<tr><td class="mono">{{.Key}}</td><td class="mono">{{.Value}}</td><td>{{.Source}}</td><td class="mono dim">{{.Flag}}</td></tr>
+ {{end}}</tbody>
+</table>
+<p class="sub dim">值以 - 显示表示未配置：base_url/model 必填；judge_* 空 = 回落执行器；judge_backend 空 = llm；spec_metrics 空 = LLM 自选；api_key/judge_api_key 恒掩码。</p>
+{{end}}
+</main>
+</body>
+</html>
