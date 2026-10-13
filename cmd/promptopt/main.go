@@ -141,6 +141,7 @@ func serveCommand(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	runsDir := fs.String("runs-dir", config.DefaultOutDir, "directory containing run artifacts")
+	synthDir := fs.String("synth-dir", "", "synthesis review tree (default: empty = unmounted; pass the synth root to enable /synth)")
 	addr := fs.String("addr", config.DefaultAddr, "listen address (host or host:port; combine host-only with --port)")
 	port := fs.Int("port", 0, "listen port when --addr is host-only (default 17700; a full host:port --addr rejects --port)")
 	if err := fs.Parse(args); err != nil {
@@ -169,9 +170,9 @@ func serveCommand(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	fmt.Fprintf(os.Stderr, "promptopt serve: http://%s (runs: %s)\n", listen, *runsDir)
-	// serve stays read-only: an empty synth dir keeps the synthesis
-	// review tree unmounted.
-	if err := web.NewServer(*runsDir, "", nil).ListenAndServe(ctx, listen); err != nil {
+	// serve stays read-only; --synth-dir opts the synthesis review tree
+	// in (default keeps it unmounted).
+	if err := web.NewServer(*runsDir, *synthDir, nil).ListenAndServe(ctx, listen); err != nil {
 		fmt.Fprintf(os.Stderr, "promptopt serve: %v\n", err)
 		return exitFailure
 	}

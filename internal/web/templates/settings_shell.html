@@ -1,0 +1,64 @@
+{{template "shell_head" .}}
+</head>
+<body>
+<div class="shell">
+{{template "shell_sidebar" .}}
+<main class="main">
+  <div class="page-head">
+    <div>
+      <div class="crumbs">工作区 / 设置</div>
+      <h1>设置</h1>
+      <p>{{.Note}}</p>
+    </div>
+  </div>
+
+  {{if .Error}}
+  <div class="card" style="border-color:var(--bad)"><h3 style="color:var(--bad)">配置文件读取失败</h3><p style="font-size:13px">{{.Error}}——修复后刷新；修复前 run/verify 会因同一文件硬错退出 1。</p></div>
+  {{else}}
+  {{if .HitPath}}<p class="crumbs mono"># config: {{.HitPath}}</p>{{end}}
+  {{range .Shadowed}}<p class="crumbs mono dim"># shadowed: {{.}}（被遮蔽，不参与生效）</p>{{end}}
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>必填项 <span class="badge bad">缺一则 run 失败</span></h3>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead><tr><th>键</th><th>状态</th><th>生效值</th></tr></thead>
+      <tbody>
+      {{range .Required}}
+        <tr>{{if .OK}}<td class="mono">{{.Key}}</td><td><span class="badge ok">已配置</span></td><td class="mono">{{.Value}}</td>{{else}}<td class="mono">{{.Key}}</td><td><span class="badge bad">缺失</span></td><td class="mono" style="color:var(--muted)">-</td>{{end}}</tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  {{if .Gaps}}
+  <div class="card" style="margin-bottom:16px">
+    <h3>缺口引导</h3>
+    <p style="font-size:13px;color:var(--muted);margin:0 0 10px">以下必须参数未配置，三种途径任选其一：</p>
+    {{range .Gaps}}
+    <details style="margin-bottom:10px">
+      <summary style="cursor:pointer;font-size:14px"><span class="mono">{{.Key}}</span> <span class="crumbs">flag {{.Flag}} · env {{.EnvKey}}</span></summary>
+      <div style="padding:8px 0">
+        <p class="crumbs">① 命令行 flag：</p><pre style="background:#0F2547;color:#E6EDF3;padding:10px;border-radius:8px;font-size:12px;overflow:auto;margin:4px 0"><code>{{.Command}}</code></pre>
+        <p class="crumbs">② 环境变量：</p><pre style="background:#0F2547;color:#E6EDF3;padding:10px;border-radius:8px;font-size:12px;overflow:auto;margin:4px 0"><code>{{.Export}}</code></pre>
+        <p class="crumbs">③ 配置文件片段{{.Wizard}}：</p><pre style="background:#0F2547;color:#E6EDF3;padding:10px;border-radius:8px;font-size:12px;overflow:auto;margin:4px 0"><code>{{.YAML}}</code></pre>
+      </div>
+    </details>
+    {{end}}
+  </div>
+  {{end}}
+
+  <div class="card table-card">
+    <h3>选填项 <span class="badge dim">有默认值 · 不阻塞</span></h3>
+    <table>
+      <thead><tr><th>键</th><th>值</th><th>来源</th><th>flag</th></tr></thead>
+      <tbody>
+      {{range .Keys}}<tr><td class="mono">{{.Key}}</td><td class="mono">{{.Value}}</td><td>{{.Source}}</td><td class="mono" style="color:var(--muted)">{{.Flag}}</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+  <p class="crumbs" style="margin-top:10px">值以 - 显示表示未配置：base_url/model 必填；judge_* 空 = 回落执行器；api_key/judge_api_key 恒掩码。页面只读，修改请用 promptopt config 子命令。</p>
+  {{end}}
+</main>
+</div>
+</body>
+</html>

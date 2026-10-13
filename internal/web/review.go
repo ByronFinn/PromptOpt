@@ -20,12 +20,70 @@ func (s *Server) registerSynthRoutes(mux *http.ServeMux) {
 	if s.synthDir == "" {
 		return
 	}
+	mux.HandleFunc("GET /synth/{$}", s.handleSynthList)
 	mux.HandleFunc("GET /synth/{id}", s.handleSynthPage)
 	mux.HandleFunc("GET /synth/{id}/rows", s.handleSynthRows)
 	mux.HandleFunc("GET /synth/{id}/status", s.handleSynthStatus)
 	mux.HandleFunc("POST /synth/{id}/samples/{sid}", s.handleSynthEditSample)
 	mux.HandleFunc("DELETE /synth/{id}/samples/{sid}", s.handleSynthDeleteSample)
 	mux.HandleFunc("POST /synth/{id}/approve", s.handleSynthApprove)
+}
+
+// synthBatch is one synthesis batch's list row (GET /synth).
+type synthBatch struct {
+	ID                               string
+	Model                            string
+	Samples, Kept                    int
+	Filtered                         bool
+	Status, StatusClass, StatusLabel string
+	CreatedAt                        string
+}
+
+// handleSynthList renders the batch list over synthDir.
+func (s *Server) handleSynthList(w http.ResponseWriter, r *http.Request) {
+	entries, err := os.ReadDir(s.synthDir)
+	if err != nil {
+		http.Error(w, "read synth dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var batches []synthBatch
+	for _, e := range entries {
+		if !e.IsDir() || !safeRunID(e.Name()) {
+			continue
+		}
+		dir := filepath.Join(s.synthDir, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err != nil {
+			continue
+		}
+		b := synthBatch{ID: e.Name(), StatusClass: "dim", StatusLabel: "未到检查点"}
+		if m, err := harness.LoadManifest(dir); err == nil {
+			b.Model = m.Model
+			b.CreatedAt = m.CreatedAt.Format("2006-01-02 15:04:05")
+		}
+		if sf, err := harness.LoadSamples(dir); err == nil {
+			b.Samples = len(sf.Samples)
+		}
+		if rp, err := harness.LoadFilterReport(dir); err == nil {
+			b.Filtered = true
+			b.Kept = rp.Kept
+		}
+		if cp, err := harness.LoadCheckpoint(dir); err == nil {
+			switch cp.Status {
+			case harness.CheckpointPending:
+				b.Status, b.StatusClass, b.StatusLabel = "pending", "warn", "待审核"
+			case harness.CheckpointApproved:
+				b.Status, b.StatusClass, b.StatusLabel = "approved", "ok", "已批准"
+			}
+		}
+		batches = append(batches, b)
+	}
+	slices.SortFunc(batches, func(a, b synthBatch) int { return strings.Compare(b.ID, a.ID) })
+	mounted := s.synthDir != ""
+	render(w, "synth.html", struct {
+		shellView
+		Mounted bool
+		Batches []synthBatch
+	}{shellView{Title: "合成审核", Active: "synth"}, mounted, batches})
 }
 
 // synthRowView is one editable sample row of the review page.
@@ -57,7 +115,10 @@ type synthReviewView struct {
 
 func (s *Server) handleSynthPage(w http.ResponseWriter, r *http.Request) {
 	if v, ok := s.loadReview(w, r); ok {
-		render(w, "review.html", v)
+		render(w, "review.html", struct {
+			shellView
+			*synthReviewView
+		}{shellView{Title: "合成集审核", Active: "synth"}, v})
 	}
 }
 

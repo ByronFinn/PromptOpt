@@ -145,15 +145,15 @@ func TestIndexListsRunCards(t *testing.T) {
 	ts := httptest.NewServer(NewServer(runsDir, "", nil).Handler())
 	defer ts.Close()
 
-	res := get(t, ts.URL+"/")
+	res := get(t, ts.URL+"/runs")
 	if !strings.Contains(res.ContentType, "text/html") {
 		t.Fatalf("content type = %q", res.ContentType)
 	}
 	body := res.Body
 	for _, want := range []string{
 		"20260928-110000-aaaa", "已完成", "json_validator=1.0000", "f1=0.6667",
-		"20260928-120000-bbbb", "预算耗尽", "未派发 2",
-		"20260928-130000-cccc", "未完成", "尚未产出 summary.json",
+		"20260928-120000-bbbb", "预算耗尽",
+		"20260928-130000-cccc", "未完成",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("index missing %q", want)
@@ -171,12 +171,12 @@ func TestIndexListsRunCards(t *testing.T) {
 func TestIndexEmptyAndLiveModes(t *testing.T) {
 	runsDir := t.TempDir()
 
-	plain := get(t, mustURL(t, NewServer(runsDir, "", nil).Handler(), "/"))
+	plain := get(t, mustURL(t, NewServer(runsDir, "", nil).Handler(), "/runs"))
 	if !strings.Contains(plain.Body, "暂无历史 run") {
 		t.Errorf("empty index missing empty state: %q", plain.Body)
 	}
 
-	live := get(t, mustURL(t, NewServer(runsDir, "", NewBus()).Handler(), "/"))
+	live := get(t, mustURL(t, NewServer(runsDir, "", NewBus()).Handler(), "/runs"))
 	for _, want := range []string{"实时事件流", "EventSource('/events')"} {
 		if !strings.Contains(live.Body, want) {
 			t.Errorf("live index missing %q", want)
@@ -215,7 +215,7 @@ func TestRunDetailPage(t *testing.T) {
 	h := NewServer(runsDir, "", nil).Handler()
 	res := get(t, mustURL(t, h, "/runs/"+runID))
 	for _, want := range []string{
-		"（exit 1）", "s1", "s2", "json_validator=1.0000",
+		"（exit <span class=\"num\">1</span>）", "s1", "s2", "json_validator=1.0000",
 		"provider 500", "extract from 患者恶寒发热", "失败样本",
 		"executor：prompt=20 completion=10 total=30", "事件流回放",
 	} {
@@ -465,6 +465,9 @@ func get(t *testing.T, url string) bodyResponse {
 	b, err := io.ReadAll(res.Body)
 	if err != nil {
 		t.Fatalf("read %s: %v", url, err)
+	}
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET %s = %d: %.300s", url, res.StatusCode, b)
 	}
 	return bodyResponse{
 		StatusCode:  res.StatusCode,

@@ -41,9 +41,10 @@ func (s *Server) handleReportPage(w http.ResponseWriter, r *http.Request) {
 	// html.EscapeString over every text byte, so template.HTML injects
 	// it without re-escaping.
 	render(w, "report.html", struct {
+		shellView
 		ID   string
 		Body template.HTML
-	}{ID: id, Body: template.HTML(renderMarkdownHTML(src))})
+	}{shellView{Title: "优化报告", Active: "runs"}, id, template.HTML(renderMarkdownHTML(src))})
 }
 
 // handleReportMarkdown serves report.md verbatim as an attachment.

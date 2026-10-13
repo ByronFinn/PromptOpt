@@ -1,136 +1,126 @@
-<!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>run {{.ID}} · PromptOpt</title>
-<link rel="icon" href="data:,">
-<style>
- :root{--fg:#1f2328;--dim:#6e7781;--line:#d8dee4;--bg:#f6f8fa;--card:#fff;--ok:#1a7f37;--bad:#cf222e;--warn:#9a6700}
- *{box-sizing:border-box}
- body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;margin:0;padding:2rem 1.25rem;background:var(--bg);color:var(--fg);line-height:1.5}
- main{max-width:60rem;margin:0 auto}
- h1{font-size:1.25rem;margin:0 0 .25rem}
- h2{font-size:1rem;margin:2rem 0 .75rem}
- .sub{color:var(--dim);font-size:.85rem;margin:0 0 1rem}
- .badge{display:inline-block;padding:.05rem .55rem;border-radius:1rem;font-size:.75rem;color:#fff;background:var(--dim);vertical-align:.15rem;margin-right:.4rem}
- .badge.ok{background:var(--ok)}.badge.bad{background:var(--bad)}.badge.warn{background:var(--warn)}
- a{color:#0969da;text-decoration:none}
- a:hover{text-decoration:underline}
- table{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:.5rem;font-size:.85rem;overflow:hidden}
- th,td{padding:.4rem .7rem;border-top:1px solid var(--line);text-align:left;vertical-align:top}
- thead th{border-top:none;color:var(--dim);font-weight:500;white-space:nowrap}
- table.kv th{width:10rem;white-space:nowrap}
- .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
- .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.dim{color:var(--dim)}
- details{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:.5rem .9rem;margin:.5rem 0}
- summary{cursor:pointer;font-size:.85rem}
- dt{color:var(--dim);font-size:.75rem;margin-top:.55rem}
- dd{margin:0}
- pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:.4rem;padding:.5rem .7rem;font-size:.78rem;max-height:20rem;overflow:auto;margin:.25rem 0 0}
- button{font:inherit;padding:.3rem 1rem;border:1px solid var(--line);border-radius:.4rem;background:var(--card);cursor:pointer}
- button:hover{background:var(--bg)}
- #replay-log{font-size:.78rem;max-height:24rem;overflow:auto;margin-top:.75rem}
- #replay-log li{margin:.15rem 0}
- #opt-log{font-size:.78rem;max-height:18rem;overflow:auto;margin:.5rem 0 0;padding-left:1.4rem}
- #opt-log li{margin:.15rem 0}
- .gauge{display:flex;flex-wrap:wrap;gap:.6rem 1.4rem;background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:.6rem .9rem;font-size:.85rem;margin:.5rem 0}
- .gauge .val{font-family:ui-monospace,Menlo,Consolas,monospace}
- .empty{color:var(--dim);padding:1.25rem;text-align:center;border:1px dashed var(--line);border-radius:.5rem;background:var(--card)}
-</style>
+{{template "shell_head" .}}
 </head>
 <body data-run-id="{{.ID}}">
-<main>
-<h1><span class="badge {{.StatusClass}}">{{.Status}}</span><span class="mono">{{.ID}}</span></h1>
-<p class="sub">
-  <a href="/">← 返回 run 列表</a> · <a href="/runs/{{.ID}}/dashboard">四视图看板</a>{{if .SynthURL}} · <a href="{{.SynthURL}}">合成集审核</a>{{end}}{{if .HasFrontier}} · <a href="/runs/{{.ID}}/frontier">前沿看板</a>{{end}} · <a href="/runs/{{.ID}}/trace">trace 浏览器</a>{{if .HasReport}} · <a href="/runs/{{.ID}}/report">优化报告</a>{{end}} · <a href="/compare">run 对比</a>
-</p>
+<div class="shell">
+{{template "shell_sidebar" .}}
+<main class="main">
+  <div class="page-head">
+    <div>
+      <div class="crumbs"><a href="/runs">Runs</a> / <span class="num">{{.ID}}</span> / run 详情</div>
+      <h1><span class="badge {{.StatusClass}}">{{.Status}}</span>（exit <span class="num">{{.ExitCode}}</span>） run 详情 <span class="num" style="font-size:15px;color:var(--muted)">{{.ID}}</span></h1>
+      <p>评估产物与审计证据的工作区下钻。</p>
+    </div>
+  </div>
 
-<h2>run 摘要</h2>
-{{if .HasSummary}}
-<table class="kv">
-  <tr><th>任务 · 候选 · 数据集</th><td>{{.Task}} · {{.Candidate}} · {{.Dataset}}{{if .Split}}（split={{.Split}}）{{end}}</td></tr>
-  <tr><th>状态</th><td><span class="{{.StatusClass}}">{{.Status}}</span>（exit {{.ExitCode}}）</td></tr>
-  <tr><th>样本</th><td>评估 {{.Evaluated}}/{{.Total}} · 失败 {{.Failed}} · 未派发 {{.Undispatched}}</td></tr>
-  {{if .Metrics}}<tr><th>指标均值</th><td class="mono">{{range .Metrics}}{{.Name}}={{.Value}}　{{end}}</td></tr>{{end}}
-  {{if .FailedSamples}}<tr><th>失败样本</th><td class="bad mono">{{range .FailedSamples}}{{.}} {{end}}</td></tr>{{end}}
-  <tr><th>时间</th><td>{{.Started}} → {{.Finished}}</td></tr>
-</table>
-{{else}}
-<div class="empty">该 run 尚未产出 summary.json（未完成或被中断），以下为已落盘的样本 trace。</div>
-{{end}}
+  <div class="filters" style="margin-bottom:var(--space-5)">
+    <a class="btn btn-primary" href="/runs/{{.ID}}/dashboard">四视图看板</a>
+    <a class="btn" href="/runs/{{.ID}}/trace">trace 浏览器</a>
+    <a class="btn" href="/compare?a={{.ID}}">run 对比</a>
+    {{if .SynthURL}}<a class="btn" href="{{.SynthURL}}">合成集审核</a>{{end}}
+    {{if .HasFrontier}}<a class="btn" href="/runs/{{.ID}}/frontier">前沿看板</a>{{end}}
+    {{if .HasReport}}<a class="btn" href="/runs/{{.ID}}/report">优化报告</a>{{end}}
+  </div>
 
-<h2>预算仪表{{if .Live}}（终态基线；实时分区见下）{{end}}</h2>
-{{if .Budget}}
-<table>
-  <thead><tr><th>项</th><th>用量</th><th>限额</th><th>余量</th></tr></thead>
-  <tbody>
-  {{range .Budget.Rows}}
-    <tr>
-      <td class="mono">{{.Label}}</td>
-      <td class="mono">{{.Detail}}</td>
-      <td class="mono">{{.Limit}}</td>
-      <td class="mono">{{.Remaining}}{{if .Note}} <span class="dim">（{{.Note}}）</span>{{end}}</td>
-    </tr>
+  <div class="card table-card">
+    <h3>run 摘要</h3>
+    {{if .HasSummary}}
+    <table>
+      <tr><th style="width:11rem;text-align:left">任务 · 候选 · 数据集</th><td>{{.Task}} · {{.Candidate}} · {{.Dataset}}{{if .Split}}（split={{.Split}}）{{end}}</td></tr>
+      <tr><th style="text-align:left">状态</th><td><span class="badge {{.StatusClass}}">{{.Status}}</span>（exit <span class="num">{{.ExitCode}}</span>）</td></tr>
+      <tr><th style="text-align:left">样本</th><td class="num">评估 {{.Evaluated}}/{{.Total}} · 失败 {{.Failed}} · 未派发 {{.Undispatched}}</td></tr>
+      {{if .Metrics}}<tr><th style="text-align:left">指标均值</th><td class="num">{{range .Metrics}}{{.Name}}={{.Value}}　{{end}}</td></tr>{{end}}
+      {{if .FailedSamples}}<tr><th style="text-align:left">失败样本</th><td class="num" style="color:var(--danger)">{{range .FailedSamples}}{{.}} {{end}}</td></tr>{{end}}
+      <tr><th style="text-align:left">时间</th><td class="num">{{.Started}} → {{.Finished}}</td></tr>
+    </table>
+    {{else}}
+    <div style="padding:var(--space-4)"><div class="empty">该 run 尚未产出 summary.json（未完成或被中断），以下为已落盘的样本 trace。</div></div>
+    {{end}}
+  </div>
+
+  <div class="card table-card" style="margin-top:var(--space-4)">
+    <h3>预算仪表{{if .Live}}（终态基线；实时分区见下）{{end}}</h3>
+    {{if .Budget}}
+    <table>
+      <thead><tr><th>项</th><th>用量</th><th>限额</th><th>余量</th></tr></thead>
+      <tbody>
+      {{range .Budget.Rows}}
+        <tr>
+          <td class="num">{{.Label}}</td>
+          <td class="num">{{.Detail}}</td>
+          <td class="mono">{{.Limit}}</td>
+          <td class="mono">{{.Remaining}}{{if .Note}} <span style="color:var(--muted)">（{{.Note}}）</span>{{end}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}
+    <div style="padding:var(--space-4)"><div class="empty">无 usage / manifest 数据</div></div>
+    {{end}}
+  </div>
+
+  {{if .Live}}
+  <div class="card" style="margin-top:var(--space-4)">
+    <h2>实时预算仪表（SSE）</h2>
+    <p style="margin:0;font-size:13px;color:var(--muted)">订阅 /events：usage 快照覆盖式校准，其后 sample_done 增量；sample_start 只作行级进度；budget_stop 标记阀门触发。</p>
+    <div id="live-gauge" style="display:flex;flex-wrap:wrap;gap:12px 24px;margin-top:10px;font-size:13px" data-tokens-limit="{{.LiveLimits.BudgetTokens}}" data-opt-limit="{{.LiveLimits.BudgetOptTokens}}" data-evals-limit="{{.LiveLimits.BudgetEvals}}">
+      <span>executor tokens <span class="num" id="g-exec">0</span>{{if .LiveLimits.BudgetTokens}} / {{.LiveLimits.BudgetTokens}}{{end}}</span>
+      <span>optimizer tokens <span class="num" id="g-opt">0</span>{{if .LiveLimits.BudgetOptTokens}} / {{.LiveLimits.BudgetOptTokens}}{{end}}</span>
+      <span>评估次数 <span class="num" id="g-evals">0</span>{{if .LiveLimits.BudgetEvals}} / {{.LiveLimits.BudgetEvals}}{{end}}</span>
+      <span id="g-valve" style="color:var(--accent-ink)" hidden>⚠ 预算阀门已触发</span>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:var(--space-4)">
+    <h2>优化轮次与事件</h2>
+    <ol id="opt-log" class="num" style="font-size:12.5px;max-height:18rem;overflow:auto;margin:0 0 0 18px;padding:0"></ol>
+  </div>
   {{end}}
-  </tbody>
-</table>
-{{else}}
-<div class="empty">无 usage / manifest 数据</div>
-{{end}}
 
-{{if .Live}}
-<h2>实时预算仪表（SSE）</h2>
-<p class="sub">订阅 /events：usage 快照覆盖式校准，其后 sample_done 增量；sample_start 只作行级进度；budget_stop 标记阀门触发。</p>
-<div class="gauge" id="live-gauge" data-tokens-limit="{{.LiveLimits.BudgetTokens}}" data-opt-limit="{{.LiveLimits.BudgetOptTokens}}" data-evals-limit="{{.LiveLimits.BudgetEvals}}">
-  <span>executor tokens <span class="val" id="g-exec">0</span>{{if .LiveLimits.BudgetTokens}} / {{.LiveLimits.BudgetTokens}}{{end}}</span>
-  <span>optimizer tokens <span class="val" id="g-opt">0</span>{{if .LiveLimits.BudgetOptTokens}} / {{.LiveLimits.BudgetOptTokens}}{{end}}</span>
-  <span>评估次数 <span class="val" id="g-evals">0</span>{{if .LiveLimits.BudgetEvals}} / {{.LiveLimits.BudgetEvals}}{{end}}</span>
-  <span id="g-valve" class="warn" hidden>⚠ 预算阀门已触发</span>
-</div>
+  {{if .Samples}}
+  <div class="card table-card" style="margin-top:var(--space-4)">
+    <h3>样本结果（{{len .Samples}}）</h3>
+    <table>
+      <thead><tr><th>样本</th><th>状态</th><th>得分</th><th>tokens</th><th>耗时</th></tr></thead>
+      <tbody>
+      {{range .Samples}}
+        <tr>
+          <td class="num">{{.ID}}</td>
+          <td><span class="badge {{.StatusClass}}">{{.Status}}</span></td>
+          <td class="num">{{range .Scores}}{{.Name}}={{.Value}} {{end}}</td>
+          <td class="num">{{.Tokens}}</td>
+          <td class="num">{{.Latency}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
 
-<h2>优化轮次与事件</h2>
-<ol id="opt-log" class="mono"></ol>
-{{end}}
-
-{{if .Samples}}
-<h2>样本结果</h2>
-<table>
-  <thead><tr><th>样本</th><th>状态</th><th>得分</th><th>tokens</th><th>耗时</th></tr></thead>
-  <tbody>
+  <h2 style="font-size:13px;color:var(--muted);margin:var(--space-5) 0 var(--space-3);font-weight:600;letter-spacing:.04em;text-transform:uppercase">样本 trace</h2>
   {{range .Samples}}
-    <tr>
-      <td class="mono">{{.ID}}</td>
-      <td class="{{.StatusClass}}">{{.Status}}</td>
-      <td class="mono">{{range .Scores}}{{.Name}}={{.Value}} {{end}}</td>
-      <td class="mono">{{.Tokens}}</td>
-      <td class="mono">{{.Latency}}</td>
-    </tr>
+  <div class="card" style="padding:0;margin-bottom:10px">
+    <details style="padding:10px 14px">
+      <summary><span class="num">{{.ID}}</span>{{if .Error}} <span style="color:var(--danger)">失败：{{.Error}}</span>{{end}}</summary>
+      <dl style="margin:8px 0 0">
+        <dt style="font-size:11.5px;color:var(--muted);margin-top:10px">prompt</dt><dd style="margin:2px 0 0"><pre>{{.Prompt}}</pre></dd>
+        {{if .Reasoning}}<dt style="font-size:11.5px;color:var(--muted);margin-top:10px">reasoning</dt><dd style="margin:2px 0 0"><pre>{{.Reasoning}}</pre></dd>{{end}}
+        <dt style="font-size:11.5px;color:var(--muted);margin-top:10px">response</dt><dd style="margin:2px 0 0"><pre>{{.Response}}</pre></dd>
+        {{if .Diagnosis}}<dt style="font-size:11.5px;color:var(--muted);margin-top:10px">诊断</dt><dd style="margin:2px 0 0">{{range .Diagnosis}}<div><span class="num">{{.Name}}</span>：{{.Value}}</div>{{end}}</dd>{{end}}
+      </dl>
+    </details>
+  </div>
   {{end}}
-  </tbody>
-</table>
+  {{else if .HasSummary}}
+  <div class="card" style="margin-top:var(--space-4)"><div class="empty">无样本 trace（样本均未派发）</div></div>
+  {{end}}
 
-<h2>样本 trace</h2>
-{{range .Samples}}
-<details>
-  <summary><span class="mono">{{.ID}}</span>{{if .Error}} <span class="bad">失败：{{.Error}}</span>{{end}}</summary>
-  <dl>
-    <dt>prompt</dt><dd><pre>{{.Prompt}}</pre></dd>
-    {{if .Reasoning}}<dt>reasoning</dt><dd><pre>{{.Reasoning}}</pre></dd>{{end}}
-    <dt>response</dt><dd><pre>{{.Response}}</pre></dd>
-    {{if .Diagnosis}}<dt>诊断</dt><dd>{{range .Diagnosis}}<div><span class="mono">{{.Name}}</span>：{{.Value}}</div>{{end}}</dd>{{end}}
-  </dl>
-</details>
-{{end}}
-{{else if .HasSummary}}
-<div class="empty">无样本 trace（样本均未派发）</div>
-{{end}}
-
-<h2>事件流回放</h2>
-<p class="sub">从 events.jsonl 逐条回放该 run 的评估事件（请求/响应摘要与 usage）。</p>
-<button id="replay-btn" type="button">回放事件流</button>
-<ol id="replay-log" class="mono"></ol>
+  <div class="card" style="margin-top:var(--space-5)">
+    <h2>事件流回放</h2>
+    <p style="margin:0;font-size:13px;color:var(--muted)">从 events.jsonl 逐条回放该 run 的评估事件（请求/响应摘要与 usage）。</p>
+    <div style="margin-top:10px"><button id="replay-btn" class="btn btn-primary" type="button">回放事件流</button></div>
+    <ol id="replay-log" class="num" style="font-size:12.5px;max-height:24rem;overflow:auto;margin:10px 0 0 18px;padding:0"></ol>
+  </div>
 </main>
+</div>
 <script>
 function fmtScores(sc){
   if (!sc) return '';
@@ -239,11 +229,8 @@ document.getElementById('replay-btn').addEventListener('click', () => {
         logOpt('run 结束：' + ev.status + '（exit ' + ev.exit_code + '）· 看板驻留至 Ctrl-C');
         break;
       default:
-        // Paradigm-specific events (gradient_done, propose_done,
-        // joint_done, population_updated …) carry Detail{paradigm,
-        // stage} per the docs/plugins.md event contract; surface them
-        // so long rounds never look stuck. sample_start/run_start
-        // stay silent (row-level progress / never forwarded).
+        // Paradigm-specific events carry Detail{paradigm, stage}; surface
+        // them so long rounds never look stuck.
         if (ev.type !== 'sample_start' && ev.type !== 'run_start')
           logOpt((d.paradigm ? '[' + d.paradigm + '] ' : '') + ev.type + (d.stage ? '：' + d.stage : ''));
     }
@@ -251,7 +238,6 @@ document.getElementById('replay-btn').addEventListener('click', () => {
   };
   es.onerror = () => {
     // The stream ends when the process tears the bus down (Ctrl-C).
-    // After run_done that is expected: stop retrying.
     if (doneSeen) es.close();
   };
   render();

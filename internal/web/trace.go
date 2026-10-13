@@ -121,7 +121,10 @@ func (s *Server) handleTracePage(w http.ResponseWriter, r *http.Request) {
 			v.File = file
 		}
 	}
-	render(w, "trace.html", v)
+	render(w, "trace.html", struct {
+		shellView
+		tracePageView
+	}{shellView{Title: "trace 浏览器", Active: "runs"}, v})
 }
 
 // loadTraceDataset joins sample ids against runs/<id>/dataset.json.

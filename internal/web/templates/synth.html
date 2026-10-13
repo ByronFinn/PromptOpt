@@ -1,0 +1,42 @@
+{{template "shell_head" .}}
+</head>
+<body>
+<div class="shell">
+{{template "shell_sidebar" .}}
+<main class="main">
+  <div class="page-head">
+    <div>
+      <div class="crumbs">工作区 / 合成审核</div>
+      <h1>合成审核</h1>
+      <p>interactive 模式下，合成数据集批次在这里等人工批准；批准后进入优化循环。</p>
+    </div>
+  </div>
+
+  {{if not .Mounted}}
+  <div class="empty">当前环境未挂载合成审核目录（serve 模式 / 手动 run）——run --interactive 时自动启用。</div>
+  {{else if not .Batches}}
+  <div class="empty">暂无合成批次</div>
+  {{else}}
+  <div class="card table-card">
+    <table>
+      <thead><tr><th>批次</th><th>模型</th><th>样本</th><th>保留/方差过滤</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+      <tbody>
+      {{range .Batches}}
+        <tr>
+          <td><a class="num" href="/synth/{{.ID}}">{{.ID}}</a></td>
+          <td class="num">{{.Model}}</td>
+          <td class="num">{{.Samples}}</td>
+          <td class="num">{{if .Filtered}}{{.Kept}}/{{.Samples}}{{else}}—{{end}}</td>
+          <td><span class="badge {{.StatusClass}}">{{.StatusLabel}}</span></td>
+          <td class="num">{{.CreatedAt}}</td>
+          <td><a href="/synth/{{.ID}}">打开审核页</a></td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+</main>
+</div>
+</body>
+</html>

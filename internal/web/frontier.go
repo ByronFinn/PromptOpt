@@ -120,7 +120,10 @@ func (s *Server) handleFrontierPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	render(w, "frontier.html", buildFrontierView(id, runDir, f))
+	render(w, "frontier.html", struct {
+		shellView
+		frontierPageView
+	}{shellView{Title: "前沿看板", Active: "runs"}, buildFrontierView(id, runDir, f)})
 }
 
 // buildFrontierView assembles the page view, degrading over artifacts

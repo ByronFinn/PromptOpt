@@ -931,3 +931,49 @@ func TestRunPageLiveDefaultBranchShips(t *testing.T) {
 		}
 	}
 }
+
+// TestHostAllowlist pins the explicit LAN escape hatch: Host checks
+// read PROMPTOPT_WEB_ALLOWED_HOSTS (host or host:port entries), while
+// the default remains loopback-only.
+func TestHostAllowlist(t *testing.T) {
+	h := NewServer(t.TempDir(), "", nil).Handler()
+
+	cases := []struct {
+		name string
+		env  string
+		host string
+		want int
+	}{
+		{name: "default rejects lan", env: "", host: "192.168.66.30:17000", want: http.StatusForbidden},
+		{name: "listed host allows", env: "192.168.66.30", host: "192.168.66.30:17000", want: http.StatusOK},
+		{name: "unlisted host still rejects", env: "192.168.66.30", host: "192.168.77.9:17000", want: http.StatusForbidden},
+		{name: "entry port ignored", env: "192.168.66.30:9999", host: "192.168.66.30:17000", want: http.StatusOK},
+		{name: "wildcard allows", env: "*", host: "example.test:80", want: http.StatusOK},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.env == "" {
+				t.Setenv("PROMPTOPT_WEB_ALLOWED_HOSTS", "")
+			} else {
+				t.Setenv("PROMPTOPT_WEB_ALLOWED_HOSTS", tc.env)
+			}
+			ts := httptest.NewServer(h)
+			t.Cleanup(ts.Close)
+
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Host = tc.host
+			res, err := ts.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			if res.StatusCode != tc.want {
+				t.Errorf("Host %q with env %q = %d, want %d", tc.host, tc.env, res.StatusCode, tc.want)
+			}
+		})
+	}
+}

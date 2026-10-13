@@ -159,7 +159,7 @@ func NewServer(runsDir, synthDir string, bus *Bus) *Server {
 // same origin) pass.
 func (s *Server) originGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopbackHost(r.Host) {
+		if !isLoopbackHost(r.Host) && !isAllowedHost(r.Host) {
 			http.Error(w, "host not allowed", http.StatusForbidden)
 			return
 		}
@@ -175,6 +175,40 @@ func (s *Server) originGuard(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isAllowedHost reports whether the request Host matches an explicit
+// allowlist entry from PROMPTOPT_WEB_ALLOWED_HOSTS (comma-separated
+// host or host:port values). Empty or unset keeps the loopback-only
+// default; a literal "*" allows any Host (operator acknowledges the
+// DNS-rebinding tradeoff by setting it).
+func isAllowedHost(hostPort string) bool {
+	list := os.Getenv("PROMPTOPT_WEB_ALLOWED_HOSTS")
+	if list == "" {
+		return false
+	}
+	h := hostPort
+	if hp, _, err := net.SplitHostPort(hostPort); err == nil {
+		h = hp
+	}
+	h = strings.Trim(h, "[]")
+	for entry := range strings.SplitSeq(list, ",") {
+		e := strings.TrimSpace(entry)
+		if e == "" {
+			continue
+		}
+		if e == "*" {
+			return true
+		}
+		eh := e
+		if ehp, _, err := net.SplitHostPort(e); err == nil {
+			eh = ehp
+		}
+		if strings.EqualFold(h, strings.Trim(eh, "[]")) {
+			return true
+		}
+	}
+	return false
 }
 
 // isLoopbackHost reports whether the Host header's host part is a
@@ -210,6 +244,7 @@ func sameOrigin(origin, host string) bool {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
+	mux.HandleFunc("GET /runs", s.handleRuns)
 	mux.HandleFunc("GET /runs/{id}", s.handleRunDetail)
 	mux.HandleFunc("GET /runs/{id}/events", s.handleRunReplay)
 	mux.HandleFunc("GET /runs/{id}/frontier", s.handleFrontierPage)
@@ -263,15 +298,27 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 // --- index ------------------------------------------------------------
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/runs", http.StatusMovedPermanently)
+}
+
+// shellView is the shared chrome data for shell-based pages.
+type shellView struct {
+	Title  string
+	Active string
+}
+
+// handleRuns renders the shell-based Runs list (migrated from index).
+func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	cards, err := listRunCards(s.runsDir)
 	if err != nil {
 		http.Error(w, "read runs: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, "index.html", struct {
+	render(w, "runs.html", struct {
+		shellView
 		Live bool
 		Runs []runCard
-	}{Live: s.bus != nil, Runs: cards})
+	}{shellView{Title: "Runs", Active: "runs"}, s.bus != nil, cards})
 }
 
 // metricCell is one rendered metric value.
@@ -279,13 +326,13 @@ type metricCell struct{ Name, Value string }
 
 // runCard is the index-page summary of one run directory.
 type runCard struct {
-	ID, Status, StatusClass                string
-	HasSummary                             bool
-	Task, Candidate, Dataset, Split        string
-	Started                                string
-	Evaluated, Total, Failed, Undispatched int
-	ExitCode                               int
-	Metrics                                []metricCell
+	ID, Status, StatusClass                  string
+	HasSummary                               bool
+	Task, TaskKey, Candidate, Dataset, Split string
+	Started                                  string
+	Evaluated, Total, Failed, Undispatched   int
+	ExitCode                                 int
+	Metrics                                  []metricCell
 }
 
 // listRunCards reads every run directory, newest first. Run ids are
@@ -320,6 +367,7 @@ func newRunCard(runDir, id string) runCard {
 	c.HasSummary = true
 	c.Status, c.StatusClass = statusView(res.Status)
 	c.Task, c.Candidate, c.Dataset, c.Split = res.TaskName, res.CandidateID, res.DatasetName, res.Split
+	c.TaskKey = readManifestLimits(runDir).TaskKey
 	c.Started = res.StartedAt.Format("2006-01-02 15:04:05")
 	c.Evaluated, c.Total = res.Evaluated, res.TotalSamples
 	c.Failed, c.Undispatched = len(res.FailedSamples), res.Undispatched
@@ -408,11 +456,11 @@ type runDetail struct {
 
 // budgetRow is one gauge line: a usage figure against its limit.
 type budgetRow struct {
-	Label     string
-	Detail    string // usage detail, e.g. "executor：prompt=20 …"
-	Limit     string // "不限" or the numeric limit
-	Remaining string // headroom under the limit, or "—"
-	Note      string // approximation caveat, "" when exact
+	Label     string `json:"label"`
+	Detail    string `json:"detail"` // usage detail, e.g. "executor：prompt=20 …"
+	Limit     string `json:"limit"`  // "不限" or the numeric limit
+	Remaining string `json:"remaining"`
+	Note      string `json:"note,omitempty"`
 }
 
 // budgetGauge is the run page budget dashboard.
@@ -426,6 +474,7 @@ type runManifestLimits struct {
 	BudgetTokens    int64  `json:"budget_tokens"`
 	BudgetEvals     int64  `json:"budget_evals"`
 	BudgetOptTokens int64  `json:"budget_opt_tokens,omitempty"`
+	TaskKey         string `json:"task_key,omitempty"`
 	Optimizer       string `json:"optimizer,omitempty"`
 }
 
@@ -594,7 +643,10 @@ func (s *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 			d.SynthURL = "/synth/" + id
 		}
 	}
-	render(w, "run.html", d)
+	render(w, "run.html", struct {
+		shellView
+		runDetail
+	}{shellView{Title: "run 详情", Active: "runs"}, d})
 }
 
 // readSampleViews loads samples/<id>.json traces sorted by sample id.

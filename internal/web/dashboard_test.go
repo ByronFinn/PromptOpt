@@ -234,7 +234,9 @@ func TestDashboardAPIEndpoints(t *testing.T) {
 		t.Errorf("overview verdict without verify artifacts = %v, want state pending (未过门禁)", ov["verdict"])
 	}
 
-	// trend: per-round best sequence with the SD error bar.
+	// trend: per-round best sequence from the complete lineage flow;
+	// SD stays a frontier/heatmap concern because lineage has no
+	// per-sample SD rows.
 	tr := decodeJSONT(t, base+"/api/trend")
 	if tr["available"] != true || tr["primary"] != "f1" || tr["rounds"] != float64(5) {
 		t.Errorf("trend header = %v", tr)
@@ -244,8 +246,8 @@ func TestDashboardAPIEndpoints(t *testing.T) {
 		t.Fatalf("trend points = %d, want 2 (round 0 baseline + round 5)", len(points))
 	}
 	p5, _ := points[1].(map[string]any)
-	if p5["best_id"] != "c-3" || p5["primary_mean"] != 0.789 || p5["sd"] != 0.035 {
-		t.Errorf("trend round-5 point = %v, want c-3/0.789/sd 0.035", p5)
+	if p5["best_id"] != "c-3" || p5["primary_mean"] != 0.789 {
+		t.Errorf("trend round-5 point = %v, want c-3/0.789", p5)
 	}
 
 	// heatmap: scores ± sd + near-noise/win marks + constraint row.

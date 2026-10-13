@@ -308,6 +308,7 @@ type overviewPayload struct {
 	Status    string `json:"status,omitempty"`
 	ExitCode  int    `json:"exit_code,omitempty"`
 	Task      string `json:"task,omitempty"`
+	TaskKey   string `json:"task_key,omitempty"`
 	Candidate string `json:"candidate,omitempty"`
 	Primary   string `json:"primary,omitempty"`
 	// PrimaryMean/PrimarySD: the run mean and the mean of per-sample
@@ -337,6 +338,7 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request) {
 	p.Status = string(res.Status)
 	p.ExitCode = res.ExitCode
 	p.Task = res.TaskName
+	p.TaskKey = readManifestLimits(runDir).TaskKey
 	p.Candidate = res.CandidateID
 	p.MetricMeans = res.MetricMeans
 	if j, ok := res.UsageByRole[core.RoleJudge]; ok {
@@ -458,12 +460,24 @@ func (s *Server) handleAPITrend(w http.ResponseWriter, r *http.Request) {
 	p := trendPayload{
 		Available: true, Primary: f.Primary, Rounds: f.Rounds, Reason: f.Reason,
 	}
-	byRound := map[int]engine.FrontierMember{}
-	for _, m := range f.Members {
-		cur, seen := byRound[m.Round]
-		if !seen || m.PrimaryMean > cur.PrimaryMean ||
-			(m.PrimaryMean == cur.PrimaryMean && m.ID < cur.ID) {
-			byRound[m.Round] = m
+	// Aggregate the complete append-only candidate flow. The Pareto
+	// frontier is the delivery view, not the round history: strictly
+	// dominated rounds disappear from it, which would falsify the trend.
+	// Lineage excludes incomplete evaluation tails from this aggregate.
+	lin, err := engine.LoadOrInitLineage(filepath.Join(runDir, "lineage.json"))
+	if err != nil {
+		writeJSON(w, trendPayload{Note: "lineage.json 解码失败：轮次趋势不可得"})
+		return
+	}
+	byRound := map[int]engine.LineageRecord{}
+	for _, rec := range lin.Records() {
+		if rec.Incomplete {
+			continue
+		}
+		cur, seen := byRound[rec.Round]
+		if !seen || rec.PrimaryMean > cur.PrimaryMean ||
+			(rec.PrimaryMean == cur.PrimaryMean && rec.ID < cur.ID) {
+			byRound[rec.Round] = rec
 		}
 	}
 	rounds := make([]int, 0, len(byRound))
@@ -472,26 +486,13 @@ func (s *Server) handleAPITrend(w http.ResponseWriter, r *http.Request) {
 	}
 	slices.Sort(rounds)
 	for _, rd := range rounds {
-		m := byRound[rd]
+		rec := byRound[rd]
 		p.Points = append(p.Points, trendPoint{
-			Round: rd, BestID: m.ID, Operator: m.Operator,
-			PrimaryMean: m.PrimaryMean, SD: sdRowMean(m.SD),
+			Round: rd, BestID: rec.ID, Operator: rec.Operator,
+			PrimaryMean: rec.PrimaryMean,
 		})
 	}
 	writeJSON(w, p)
-}
-
-// sdRowMean averages a per-sample sd row (the error-bar height); empty
-// rows (single-shot artifacts) read 0.
-func sdRowMean(sd []float64) float64 {
-	if len(sd) == 0 {
-		return 0
-	}
-	sum := 0.0
-	for _, v := range sd {
-		sum += v
-	}
-	return sum / float64(len(sd))
 }
 
 // heatMember is one heatmap column (a frontier member).

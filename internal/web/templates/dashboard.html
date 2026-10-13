@@ -194,7 +194,7 @@ footer{max-width:1240px;margin:0 auto;padding:var(--space-5) var(--space-6);
     </svg>
     PromptOpt <small>看板</small>
   </div>
-  <span class="run-pill"><span class="dot run" aria-hidden="true"></span>
+  <span class="run-pill"><span class="dot" id="status-dot" aria-hidden="true"></span>
     <span class="num">{{.ID}}</span>{{if .Task}} · {{.Task}}{{end}}</span>
   <nav class="tabs" role="tablist" aria-label="看板视图">
     <button class="tab" role="tab" aria-selected="true"  aria-controls="view-overview" id="tab-overview">① 总览监控</button>
@@ -202,7 +202,7 @@ footer{max-width:1240px;margin:0 auto;padding:var(--space-5) var(--space-6);
     <button class="tab" role="tab" aria-selected="false" aria-controls="view-trace"   id="tab-trace">③ 样本证据</button>
     <button class="tab" role="tab" aria-selected="false" aria-controls="view-verify"  id="tab-verify">④ 交付门禁</button>
   </nav>
-  <span class="proto-badge">演示数据卡片 · 事件流与采纳为实时接口</span>
+  <span class="proto-badge">全部数据来自五端点 · 无演示数据</span>
 </header>
 
 <main>
@@ -211,96 +211,22 @@ footer{max-width:1240px;margin:0 auto;padding:var(--space-5) var(--space-6);
 <section class="view active" id="view-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
   <div class="view-head">
     <h1>Run 总览</h1>
-    <p>优化进行中 · 第 5/5 轮 · GEPA 反思进化 · executor <span class="num">jiuwei-tcm</span> @ 192.168.56.39:59001 · workers 4 · reps <span class="num">3</span></p>
+    <p id="ov-subtitle">加载中…</p>
   </div>
 
   {{template "verdict_banner" .Verdict}}
 
-  <div class="grid cols-4">
-    <div class="card stat">
-      <span class="label">主指标 f1（均值 ± 标准差，reps=3）</span>
-      <span class="value">0.789 <small style="font-size:13px;color:var(--muted)">±0.041</small></span>
-      <span class="sub">基线 0.620 → <span class="delta-up num">Δ +0.169</span>
-        <span class="badge badge-v7">V7 · CI [+0.09, +0.24]</span></span>
-    </div>
-    <div class="card stat">
-      <span class="label">约束指标 json_validator</span>
-      <span class="value">1.00</span>
-      <span class="sub">基线 0.83 · 确定性硬检查，不进支配排序</span>
-    </div>
-    <div class="card stat">
-      <span class="label">token 预算（executor / 判分）</span>
-      <div class="meter"><div class="bar"><div class="fill" style="width:77%"></div></div>
-        <div class="cap"><span>46,280 / 60,000</span><span>77%</span></div></div>
-      <span class="sub">判分（RoleJudge）<span class="num">—</span> · 本任务未声明 llm_judge
-        <span class="badge badge-v7">V7 · 角色单列</span></span>
-    </div>
-    <div class="card stat">
-      <span class="label">评估次数 / 用时</span>
-      <div class="meter"><div class="bar"><div class="fill" style="width:80%"></div></div>
-        <div class="cap"><span>96 / 120</span><span>80%</span></div></div>
-      <span class="sub">进行中 41m 12s · 失败样本 0 · 未派发 0</span>
-    </div>
-  </div>
+  <div class="grid cols-4" id="ov-cards"></div>
 
   <div class="grid cols-2" style="margin-top:16px">
     <div class="card">
-      <h2>轮次趋势 · 每轮最优 f1
-        <span class="spacer"></span>
-        <span class="badge">现状</span><span class="badge badge-v7">V7 · 误差条</span>
-      </h2>
-      <div class="chart-wrap">
-      <svg viewBox="0 0 640 250" width="100%" role="img"
-           aria-label="折线图：基线 f1 恒为 0.620（虚线）；每轮最优从 0.635 升至 0.789（实线），误差条为 reps=3 的标准差，第 4 轮停滞触发 Fresh 重启">
-        <!-- 网格与轴 -->
-        <line class="gridline" x1="50" y1="30" x2="620" y2="30"/><text class="axis" x="16" y="34">1.00</text>
-        <line class="gridline" x1="50" y1="90"  x2="620" y2="90"/><text class="axis" x="16" y="94">0.80</text>
-        <line class="gridline" x1="50" y1="150" x2="620" y2="150"/><text class="axis" x="16" y="154">0.60</text>
-        <line class="gridline" x1="50" y1="210" x2="620" y2="210"/><text class="axis" x="16" y="214">0.40</text>
-        <text class="axis" x="300" y="240">优化轮次</text>
-        <!-- 基线（虚线灰） -->
-        <line x1="50" y1="138" x2="620" y2="138" stroke="#94A3B8" stroke-width="2" stroke-dasharray="6 4"/>
-        <text class="series-label" x="528" y="130" fill="#64748B">基线 0.620</text>
-        <!-- 每轮最优（实线蓝）+ 误差条 -->
-        <!-- y = 270 - v*240: .635→117.6  .658→112.1  .712→99.1  .691→104.2  .789→80.6 -->
-        <g stroke="#1E40AF" stroke-width="2" fill="none">
-          <path d="M60 118 L180 112 L300 99 L420 104 L560 81"/>
-        </g>
-        <!-- 误差条 ±sd -->
-        <g stroke="#1E40AF" stroke-width="1.5">
-          <line x1="60"  y1="108" x2="60"  y2="128"/><line x1="55" y1="108" x2="65" y2="108"/><line x1="55" y1="128" x2="65" y2="128"/>
-          <line x1="180" y1="101" x2="180" y2="123"/><line x1="175" y1="101" x2="185" y2="101"/><line x1="175" y1="123" x2="185" y2="123"/>
-          <line x1="300" y1="88"  x2="300" y2="110"/><line x1="295" y1="88"  x2="305" y2="88"/><line x1="295" y1="110" x2="305" y2="110"/>
-          <line x1="420" y1="94"  x2="420" y2="115"/><line x1="415" y1="94"  x2="425" y2="94"/><line x1="415" y1="115" x2="425" y2="115"/>
-          <line x1="560" y1="70"  x2="560" y2="91"/><line x1="555" y1="70"  x2="565" y2="70"/><line x1="555" y1="91" x2="565" y2="91"/>
-        </g>
-        <g fill="#1E40AF">
-          <circle cx="60" cy="118" r="4"/><circle cx="180" cy="112" r="4"/><circle cx="300" cy="99" r="4"/>
-          <circle cx="420" cy="104" r="4" fill="#fff" stroke="#1E40AF" stroke-width="2"/>
-          <circle cx="560" cy="81" r="5"/>
-        </g>
-        <text class="series-label" x="470" y="60" fill="#1E40AF">每轮最优 0.789</text>
-        <text class="axis" x="400" y="126">第4轮停滞（Fresh 重启）</text>
-        <text class="axis" x="56" y="34">基线</text>
-        <text class="axis" x="176" y="34">R1</text><text class="axis" x="296" y="34">R2</text>
-        <text class="axis" x="416" y="34">R3</text><text class="axis" x="556" y="34">R4</text>
-      </svg>
-      </div>
-      <details><summary>数据表（图表替代文本）</summary>
-        <table><thead><tr><th>轮次</th><th class="num">最优 f1</th><th class="num">±sd</th><th class="num">事件</th></tr></thead>
-        <tbody>
-          <tr><td>基线</td><td class="num">0.620</td><td class="num">±0.048</td><td>—</td></tr>
-          <tr><td>R1</td><td class="num">0.635</td><td class="num">±0.044</td><td>变异提议 ×2</td></tr>
-          <tr><td>R2</td><td class="num">0.658</td><td class="num">±0.046</td><td>反思提议 ×1</td></tr>
-          <tr><td>R3</td><td class="num">0.712</td><td class="num">±0.046</td><td>假设命中</td></tr>
-          <tr><td>R4</td><td class="num">0.691</td><td class="num">±0.044</td><td>停滞 → Fresh 重启</td></tr>
-          <tr><td>R5</td><td class="num">0.789</td><td class="num">±0.041</td><td>反思 + 跃升</td></tr>
-        </tbody></table>
-      </details>
+      <h2>轮次趋势 · 每轮最优</h2>
+      <div class="chart-wrap" id="trend-chart"><div class="empty">加载中…</div></div>
+      <details><summary>数据表（图表替代文本）</summary><div id="trend-table"><div class="empty">加载中…</div></div></details>
     </div>
 
     <div class="card">
-      <h2>实时事件流（SSE）<span class="spacer"></span><span class="badge">现状</span></h2>
+      <h2>实时事件流（SSE）</h2>
       <div class="feed-tools">
         <button class="btn" id="pause-btn" aria-pressed="false">
           <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="3.6" height="10" fill="currentColor"/><rect x="7.2" y="1" width="3.6" height="10" fill="currentColor"/></svg>
@@ -310,7 +236,7 @@ footer{max-width:1240px;margin:0 auto;padding:var(--space-5) var(--space-6);
       </div>
       <div class="feed" id="feed" aria-live="polite" aria-label="实时事件"></div>
       <hr class="sep">
-      <div class="empty">失败样本：无 · 因预算未派发：无 —— 若出现将在此列出样本 ID 与错误摘录，并按退出码契约预告（2=预算耗尽 &gt; 1=评估失败）。</div>
+      <div class="empty" id="fail-samples">失败样本：加载中…</div>
     </div>
   </div>
 </section>
@@ -319,17 +245,16 @@ footer{max-width:1240px;margin:0 auto;padding:var(--space-5) var(--space-6);
 <section class="view" id="view-frontier" role="tabpanel" aria-labelledby="tab-frontier" tabindex="0">
   <div class="view-head">
     <h1>帕累托前沿与采纳</h1>
-    <p>6 个 dev 样本 × 前沿 4 候选 · 单元格 = 逐样本 f1 均值（reps=3）± 标准差 · 绿框 = 该样本最优 · 虚线下划 = 差异在噪声余量 ε=0.05 内</p>
+    <p id="fr-subtitle">加载中…</p>
   </div>
 
   <div class="card" style="margin-bottom:16px">
-    <h2>采纳决策<span class="spacer"></span>
-      <span class="badge badge-v7">V7 · 噪声感知准入</span><span class="badge">现状 · adopt 端点</span></h2>
+    <h2>采纳决策</h2>
     <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
-      <div class="kv" style="flex:1;min-width:280px">
-        <dt>交付候选</dt><dd>{{if .Adopt}}{{.Adopt.CandidateID}}{{if .Adopt.Adopted}}（已采纳）{{end}}{{else}}（无 frontier 工件，无法采纳）{{end}}</dd>
-        <dt>vs 基线</dt><dd class="delta-up">f1 +0.169 · CI [+0.09, +0.24]（证据充分）</dd>
-        <dt>成本</dt><dd>741 tok/样本（基线 612）· P50 10.2s</dd>
+      <div class="kv" style="flex:1;min-width:280px" id="adopt-kv">
+        <dt>交付候选</dt><dd id="adopt-cand">加载中…</dd>
+        <dt>vs 基线</dt><dd id="adopt-delta">加载中…</dd>
+        <dt>token 用量</dt><dd id="adopt-usage">加载中…</dd>
       </div>
       <div style="display:flex;flex-direction:column;gap:8px;align-items:stretch">
         <button class="btn btn-primary" id="adopt-btn" data-candidate="{{with .Adopt}}{{.CandidateID}}{{end}}"{{if not .Adopt}} disabled{{end}}>
@@ -342,81 +267,18 @@ footer{max-width:1240px;margin:0 auto;padding:var(--space-5) var(--space-6);
   </div>
 
   <div class="card">
-    <h2>前沿热力表<span class="spacer"></span><span class="badge">现状</span><span class="badge badge-v7">V7 · ±sd / ε 余量 / ε-clone</span></h2>
-    <div class="chart-wrap">
-    <table class="heat">
-      <thead><tr>
-        <th class="rowhead">样本</th>
-        <th>baseline<br><small style="font-weight:400">基线</small></th>
-        <th>c-r3-mut<br><small style="font-weight:400">R3 · 变异</small></th>
-        <th>c-r4-hypo<br><small style="font-weight:400">R4 · 假设</small></th>
-        <th>c-r5-reflect<br><small style="font-weight:400">R5 · 反思 · 均值最优</small></th>
-      </tr></thead>
-      <tbody>
-        <tr><th class="rowhead">dev-001</th>
-          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.92</span><span class="sd">±0.03</span></td>
-          <td class="cell">0.78<span class="sd">±0.05</span></td>
-          <td class="cell">0.66<span class="sd">±0.06</span></td>
-          <td class="cell">0.85<span class="sd">±0.04</span></td></tr>
-        <tr><th class="rowhead">dev-002</th>
-          <td class="cell">0.38<span class="sd">±0.07</span></td>
-          <td class="cell">0.71<span class="sd">±0.05</span></td>
-          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.90</span><span class="sd">±0.03</span></td>
-          <td class="cell">0.76<span class="sd">±0.05</span></td></tr>
-        <tr><th class="rowhead">dev-003</th>
-          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.85</span><span class="sd">±0.04</span></td>
-          <td class="cell">0.69<span class="sd">±0.06</span></td>
-          <td class="cell">0.55<span class="sd">±0.08</span></td>
-          <td class="cell">0.80<span class="sd">±0.04</span></td></tr>
-        <tr><th class="rowhead">dev-004</th>
-          <td class="cell">0.42<span class="sd">±0.08</span></td>
-          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.83</span><span class="sd">±0.04</span></td>
-          <td class="cell">0.79<span class="sd">±0.05</span></td>
-          <td class="cell near-noise">0.79<span class="sd">±0.04</span></td></tr>
-        <tr><th class="rowhead">dev-005</th>
-          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.88</span><span class="sd">±0.03</span></td>
-          <td class="cell">0.74<span class="sd">±0.05</span></td>
-          <td class="cell">0.61<span class="sd">±0.07</span></td>
-          <td class="cell">0.82<span class="sd">±0.04</span></td></tr>
-        <tr><th class="rowhead">dev-006</th>
-          <td class="cell">0.27<span class="sd">±0.06</span></td>
-          <td class="cell">0.58<span class="sd">±0.06</span></td>
-          <td class="cell"><span class="win" style="display:inline-block;padding:2px 8px">0.84</span><span class="sd">±0.04</span></td>
-          <td class="cell">0.71<span class="sd">±0.05</span></td></tr>
-      </tbody>
-      <tfoot>
-        <tr><td>f1 均值</td><td class="num">0.620</td><td class="num">0.722</td><td class="num">0.725</td><td class="num" style="color:var(--primary)">0.789</td></tr>
-        <tr><td>json_validator（约束）</td><td class="num">0.83</td><td class="num">1.00</td><td class="num">0.83</td><td class="num">1.00</td></tr>
-        <tr><td>token/样本 · P50 延迟</td><td class="num">612 · 8.9s</td><td class="num">705 · 9.4s</td><td class="num">668 · 9.1s</td><td class="num">741 · 10.2s</td></tr>
-        <tr><td>准入方式</td><td>初始</td><td>严格支配准入</td><td>ε 余量准入 <span class="badge badge-v7">V7</span></td><td>ε 余量准入 <span class="badge badge-v7">V7</span></td></tr>
-      </tfoot>
-    </table>
-    </div>
+    <h2>前沿热力表</h2>
+    <div class="chart-wrap" id="heat-table"><div class="empty">加载中…</div></div>
     <div class="legend">
-      <span><span class="swatch" style="background:#1E40AF"></span>f1 高</span>
-      <span><span class="swatch" style="background:#93B8F0"></span>f1 中</span>
-      <span><span class="swatch" style="background:#EDF3FC"></span>f1 低</span>
       <span><span class="swatch" style="outline:2px solid var(--ok);outline-offset:-1px"></span>该样本最优</span>
       <span style="text-decoration:underline dotted var(--accent);text-underline-offset:3px">差异 ≤ ε（噪声内，不可判优劣）</span>
     </div>
-    <p class="note">说明：颜色仅为扫读辅助，精确比较始终以单元格数字为准（无障碍要求不以颜色为唯一载体）。约束指标（json_validator）不参与帕累托支配排序，仅作为 Best 候选的硬过滤条件——这就是 c-r4-hypo 虽在前沿、却被排除出交付推荐的原因。</p>
+    <p class="note">说明：精确比较以单元格数字为准；约束指标不参与帕累托支配排序，仅作交付候选硬过滤。</p>
   </div>
 
   <div class="card" style="margin-top:16px">
-    <h2>谱系（lineage）<span class="spacer"></span><span class="badge">现状</span></h2>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:12.5px">
-      <span class="badge badge-gray">baseline</span>
-      <svg width="16" height="10" aria-hidden="true"><path d="M0 5h12M8 1l4 4-4 4" stroke="#94A3B8" fill="none" stroke-width="1.5"/></svg>
-      <span class="badge badge-gray">R1 变异 ×2（均被支配，淘汰）</span>
-      <svg width="16" height="10" aria-hidden="true"><path d="M0 5h12M8 1l4 4-4 4" stroke="#94A3B8" fill="none" stroke-width="1.5"/></svg>
-      <span class="badge badge-gray">R2 反思（淘汰）</span>
-      <svg width="16" height="10" aria-hidden="true"><path d="M0 5h12M8 1l4 4-4 4" stroke="#94A3B8" fill="none" stroke-width="1.5"/></svg>
-      <span class="badge">c-r3-mut 进前沿</span>
-      <svg width="16" height="10" aria-hidden="true"><path d="M0 5h12M8 1l4 4-4 4" stroke="#94A3B8" fill="none" stroke-width="1.5"/></svg>
-      <span class="badge">c-r4-hypo 进前沿</span>
-      <svg width="16" height="10" aria-hidden="true"><path d="M0 5h12M8 1l4 4-4 4" stroke="#94A3B8" fill="none" stroke-width="1.5"/></svg>
-      <span class="badge badge-ok">c-r5-reflect 进前沿 · 均值最优</span>
-    </div>
+    <h2>谱系（lineage）</h2>
+    <div id="lineage-table"><div class="empty">加载中…</div></div>
   </div>
 </section>
 
@@ -424,72 +286,11 @@ footer{max-width:1240px;margin:0 auto;padding:var(--space-5) var(--space-6);
 <section class="view" id="view-trace" role="tabpanel" aria-labelledby="tab-trace" tabindex="0">
   <div class="view-head">
     <h1>样本证据下钻</h1>
-    <p>选中候选 c-r5-reflect · dev-004（该候选相对最弱样本——审查最弱处比看均值更能暴露风险）</p>
+    <p>逐样本分数、误差条与失败信息；完整 prompt/response/诊断请打开 trace 浏览器</p>
   </div>
-
-  <div class="grid cols-trace">
-    <div class="card">
-      <h2>样本选择</h2>
-      <div class="side-list" role="group" aria-label="样本列表">
-        <button class="pick" aria-pressed="false"><span>dev-001</span><span class="sc">f1 0.85</span></button>
-        <button class="pick" aria-pressed="false"><span>dev-002</span><span class="sc">f1 0.76</span></button>
-        <button class="pick" aria-pressed="false"><span>dev-003</span><span class="sc">f1 0.80</span></button>
-        <button class="pick" aria-pressed="true"><span>dev-004</span><span class="sc">f1 0.79</span></button>
-        <button class="pick" aria-pressed="false"><span>dev-005</span><span class="sc">f1 0.82</span></button>
-        <button class="pick" aria-pressed="false"><span>dev-006</span><span class="sc">f1 0.71</span></button>
-      </div>
-      <hr class="sep">
-      <div class="kv">
-        <dt>输入</dt><dd>118 字 · 病案文本</dd>
-        <dt>期望</dt><dd>5 实体（证候×1 方剂×1 症状×3）</dd>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>提示词（与基线 diff）<span class="spacer"></span><span class="badge">现状 · trace/diff</span></h2>
-<pre>你是中医病案信息抽取助手。从 {input} 中抽取结构化实体。
-<ins>仅输出一个 JSON 对象，键为 syndromes / prescriptions / symptoms，值为字符串数组。</ins>
-<ins>证候名须为规范术语（参考《中医临床诊疗术语》），不得输出原文短语的口语化变体。</ins>
-<del>把找到的所有信息都列出来。</del>
-<ins>若某类实体不存在，输出空数组。不要输出任何解释。</ins></pre>
-      <details><summary>展开完整提示词（54 行）</summary><pre>你是中医病案信息抽取助手。从 {input} 中抽取结构化实体。
-仅输出一个 JSON 对象，键为 syndromes / prescriptions / symptoms，值为字符串数组。
-证候名须为规范术语（参考《中医临床诊疗术语》），不得输出原文短语的口语化变体。
-若某类实体不存在，输出空数组。不要输出任何解释。</pre></details>
-      <hr class="sep">
-      <h2>模型响应</h2>
-<pre>{
-  "syndromes":    ["肝肾阴虚证"],
-  "prescriptions": ["六味地黄丸"],
-  "symptoms":     ["眩晕", "耳鸣", "腰膝酸软"]
-}</pre>
-      <details><summary>推理过程（reasoning，812 tok）——长文本默认折叠</summary>
-<pre class="reasoning">先定位证候描述「眩晕耳鸣、腰膝酸软三月余」……
-「六味地黄丸」为方剂名，归 prescriptions……</pre></details>
-    </div>
-
-    <div class="card">
-      <h2>评分与重复采样<span class="spacer"></span><span class="badge badge-v7">V7 · reps/±sd</span></h2>
-      <div class="score-grid">
-        <div class="score-item"><div class="k">f1（3 次采样均值）</div>
-          <div class="v">0.79 <small style="font-size:12px;color:var(--muted)">±0.04</small></div></div>
-        <div class="score-item"><div class="k">json_validator</div><div class="v">1.00 ✓</div></div>
-        <div class="score-item"><div class="k">延迟 / tokens</div>
-          <div class="v" style="font-size:14px">10.1s · 748</div></div>
-        <div class="score-item"><div class="k">裁判诊断</div>
-          <div class="v" style="font-size:13px;color:var(--muted)">未声明 llm_judge</div></div>
-      </div>
-      <p style="font-size:12px;color:var(--muted);margin:12px 0 4px">逐次采样分数（reps）：</p>
-      <div class="rep-strip" role="img" aria-label="三次采样 f1 分别为 0.83、0.79、0.75，均值 0.79">
-        <div class="rep" style="height:83%"><span>0.83</span></div>
-        <div class="rep" style="height:79%"><span>0.79</span></div>
-        <div class="rep" style="height:75%"><span>0.75</span></div>
-      </div>
-      <div class="empty" style="margin-top:14px">基线同样本 f1 = 0.42 ±0.08（本候选在该样本提升 +0.37，超出噪声余量 ε=0.05）。</div>
-      <hr class="sep">
-      <h2>错误样本时……</h2>
-      <div class="empty">失败样本会显示错误摘录与重试记录（429/5xx 指数退避 ×4），此处演示空态。</div>
-    </div>
+  <div class="card">
+    <h2>样本列表 <span class="spacer"></span><a class="btn btn-ghost" id="trace-link" href="#">打开 trace 浏览器 →</a></h2>
+    <div id="sample-table"><div class="empty">加载中…</div></div>
   </div>
 </section>
 
@@ -497,84 +298,32 @@ footer{max-width:1240px;margin:0 auto;padding:var(--space-5) var(--space-6);
 <section class="view" id="view-verify" role="tabpanel" aria-labelledby="tab-verify" tabindex="0">
   <div class="view-head">
     <h1>verify 交付门禁</h1>
-    <p>采纳候选 c-r5-reflect vs 基线 · 真实锚点集 5 条（anchors/tcm-ner/，confirmed）· 两侧同集 reps=3 · 配对自助法 B=1000</p>
+    <p>顶部横幅与下方结论读同一份 verify/<ts>/verify.json；未跑过 verify 即「未过门禁」</p>
   </div>
 
   {{template "verdict_banner" .Verdict}}
 
   <div class="grid cols-2">
     <div class="card">
-      <h2>配对差分 · f1<span class="spacer"></span><span class="badge badge-v7">V7 · 配对自助法 CI</span></h2>
-      <div class="chart-wrap">
-      <svg viewBox="0 0 560 130" width="100%" role="img"
-           aria-label="置信区间图：Δ=基线减交付均值-0.152，95% CI [-0.24, -0.06]，区间整体在零线左侧，判定为置信通过">
-        <line class="gridline" x1="40" y1="60" x2="530" y2="60"/>
-        <!-- x 轴：-0.35 → +0.35 映射到 40 → 530；x = 285 + v*700 -->
-        <line x1="285" y1="18" x2="285" y2="100" stroke="#64748B" stroke-width="1.5"/>
-        <text class="axis" x="281" y="114">0</text>
-        <line x1="250" y1="18" x2="250" y2="100" stroke="#D97706" stroke-width="1.5" stroke-dasharray="5 4"/>
-        <text class="axis" x="222" y="114">-0.05 阈值</text>
-        <text class="axis" x="40" y="114">-0.35</text><text class="axis" x="505" y="114">+0.35</text>
-        <text class="axis" x="40" y="34" style="font-size:10.5px">← 交付更优</text>
-        <text class="axis" x="462" y="34" style="font-size:10.5px">交付更差 →</text>
-        <!-- CI 区间 [-0.24,-0.06] → x 117..203 -->
-        <line x1="117" y1="60" x2="203" y2="60" stroke="#15803D" stroke-width="6" stroke-linecap="round"/>
-        <circle cx="178.6" cy="60" r="6" fill="#0F2547"/>
-        <text x="117" y="42" style="font-size:12px;font-weight:600" fill="#15803D">CI [-0.24, -0.06] · 上界 ≤ 0</text>
-        <text x="117" y="92" class="axis">均值 Δ = -0.152（f1 提升 +0.152）· n=5 锚点 · reps=3 · B=1000</text>
-      </svg>
-      </div>
-      <table style="margin-top:8px">
-        <thead><tr><th>锚点样本</th><th class="num">基线 f1</th><th class="num">交付 f1</th><th class="num">D = 基线−交付</th></tr></thead>
-        <tbody>
-          <tr><td class="num">anchor-01</td><td class="num">0.61</td><td class="num">0.92</td><td class="num" style="color:var(--ok)">-0.31</td></tr>
-          <tr><td class="num">anchor-02</td><td class="num">0.55</td><td class="num">0.73</td><td class="num" style="color:var(--ok)">-0.18</td></tr>
-          <tr><td class="num">anchor-03</td><td class="num">0.78</td><td class="num">0.87</td><td class="num" style="color:var(--ok)">-0.09</td></tr>
-          <tr><td class="num">anchor-04</td><td class="num">0.90</td><td class="num">0.86</td><td class="num" style="color:var(--danger)">+0.04</td></tr>
-          <tr><td class="num">anchor-05</td><td class="num">0.66</td><td class="num">0.88</td><td class="num" style="color:var(--ok)">-0.22</td></tr>
-        </tbody>
-      </table>
-      <p class="note">anchor-04 单点轻微退化为噪声区间内的正常波动——这正是配对差分的价值：样本难度在差分中抵消，判定由整组 CI 而非单点做出。</p>
+      <h2>配对差分</h2>
+      <div class="chart-wrap" id="ci-chart"><div class="empty">加载中…</div></div>
+      <div id="diff-table" style="margin-top:8px"><div class="empty">加载中…</div></div>
     </div>
 
     <div>
       <div class="card">
-        <h2>对照：不可判定态长什么样<span class="spacer"></span><span class="badge badge-v7">V7 · 三态门禁</span></h2>
-        <div class="chart-wrap">
-        <svg viewBox="0 0 520 118" width="100%" role="img"
-             aria-label="对照示例：CI [-0.03, +0.05] 跨越零线与阈值，判定为不可判定，样本量不足">
-          <line x1="30" y1="52" x2="500" y2="52" class="gridline"/>
-          <line x1="265" y1="14" x2="265" y2="88" stroke="#64748B" stroke-width="1.5"/><text class="axis" x="262" y="104">0</text>
-          <line x1="230" y1="14" x2="230" y2="88" stroke="#D97706" stroke-width="1.5" stroke-dasharray="5 4"/><text class="axis" x="204" y="104">-0.05</text>
-          <line x1="244" y1="52" x2="300" y2="52" stroke="#64748B" stroke-width="6" stroke-linecap="round"/>
-          <circle cx="272" cy="52" r="5" fill="#475569"/>
-          <text x="244" y="36" style="font-size:12px;font-weight:600" fill="#475569">CI [-0.03, +0.05] · 跨零 → 不可判定</text>
-          <text x="244" y="82" class="axis">退出码 0，但报告强制标注「差异未超噪声区间，样本量不足」</text>
-        </svg>
-        </div>
-        <p class="note" style="margin-top:4px">三态视觉语言：<b style="color:var(--ok)">通过</b>（区间整体在阈值左侧）/ <b style="color:var(--danger)">回归</b>（CI 下界 &gt; 阈值，退出码 3）/ <b style="color:var(--muted)">不可判定</b>（灰，诚实报告而非假自信）。锚点库（<span class="num">anchors/&lt;task-key&gt;/</span>）的价值正在于把不可判定收窄成可判定。</p>
-      </div>
-
-      <div class="card" style="margin-top:16px">
-        <h2>采纳与回退<span class="spacer"></span><span class="badge">现状 · rollback/审计</span></h2>
+        <h2>采纳与回退</h2>
         <div class="kv">
-          <dt>当前采纳</dt><dd>c-r5-reflect（adopted.json）</dd>
-          <dt>采纳历史</dt><dd>1 次采纳 · 0 次回退（adopted-history.jsonl）</dd>
-          <dt>完整审计</dt><dd><code class="num">promptopt replay &lt;run_id&gt;</code> 时间线</dd>
+          <dt>当前采纳</dt><dd id="vf-adopted">加载中…</dd>
+          <dt>回退命令</dt><dd><code class="num">promptopt rollback &lt;run_id&gt;</code></dd>
+          <dt>完整审计</dt><dd><code class="num">promptopt replay &lt;run_id&gt;</code></dd>
         </div>
-        <div class="empty" style="margin-top:10px">回退入口：发现线上退化时执行 <code class="num">promptopt rollback &lt;run_id&gt;</code>，历史追加写入，不覆盖。</div>
+        <div class="empty" style="margin-top:10px">发现线上退化时执行 rollback，历史追加写入 adopted-history.jsonl，不覆盖。</div>
       </div>
 
       <div class="card" style="margin-top:16px">
         <h2>退出码契约</h2>
-        <table class="exit-codes">
-          <tbody>
-            <tr><td>0</td><td>成功（含「不可判定」——证据不足不是失败）</td></tr>
-            <tr><td>1</td><td>评估失败或用法错误</td></tr>
-            <tr><td>2</td><td>预算耗尽（优先于 1）</td></tr>
-            <tr><td>3</td><td>verify 回归或约束违反（CI 下界超阈值）</td></tr>
-          </tbody>
-        </table>
+        <div id="exit-codes"><div class="empty">加载中…</div></div>
       </div>
     </div>
   </div>
@@ -583,8 +332,7 @@ footer{max-width:1240px;margin:0 auto;padding:var(--space-5) var(--space-6);
 </main>
 
 <footer>
-  <b>说明</b>：本页是 PromptOpt 四视图看板（总览监控 / 前沿与采纳 / 样本证据 / 交付门禁），视图结构、设计令牌与无障碍基线（非仅色指示、键盘可导航、可见焦点、<code class="num">prefers-reduced-motion</code> 降级、图表附数据表替代文本）与评审稿原型同源。
-  实时接口：事件流（<code class="num">/runs/{id}/events</code> SSE 回放 + 实时续播）、采纳按钮（<code class="num">POST /runs/{id}/adopt</code>）、交付门禁横幅（读 <code class="num">verify/&lt;ts&gt;/verify.json</code> 三态，未跑过 verify 即「未过门禁」）；卡片内其余示例数字为评审稿演示数据，结构化真源见 <code class="num">GET /runs/{id}/api/{overview,trend,heatmap,lineage,verify}</code> 五端点。回退走 CLI：<code class="num">promptopt rollback &lt;run_id&gt;</code>。
+  <b>说明</b>：本页所有数字均从 <code class="num">GET /runs/{id}/api/{overview,trend,heatmap,lineage,verify}</code> 五数据端点异步拉取并实时渲染——无硬编码演示数据。事件流接 <code class="num">/runs/{id}/events</code> SSE 回放；采纳按钮接 <code class="num">POST /runs/{id}/adopt</code>；回退走 CLI <code class="num">promptopt rollback &lt;run_id&gt;</code>。
 </footer>
 
 <script>
@@ -611,8 +359,168 @@ document.getElementById('goto-verify').addEventListener('click',e=>{
   e.preventDefault();select(tabs[3]);
 });
 
-/* 实时事件流：接既有 /runs/{id}/events SSE（events.jsonl 历史回放，
-   run --web 期间实时续播；run_done 为终态，收到即关流）。 */
+/* --- 工具函数 --- */
+const RUN=document.body.dataset.run;
+const API='/runs/'+RUN+'/api/';
+function el(tag,cls,txt){const e=document.createElement(tag);if(cls)e.className=cls;if(txt!==undefined)e.textContent=txt;return e;}
+function fmt(v,d){return v==null||isNaN(v)?'—':Number(v).toFixed(d===undefined?4:d);}
+function empty(node,msg){node.innerHTML='';node.appendChild(el('div','empty',msg));}
+async function api(name){
+  const r=await fetch(API+name);
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  return r.json();
+}
+
+/* --- ① 总览 --- */
+let ovData=null;
+async function loadOverview(){
+  try{
+    ovData=await api('overview');
+  }catch(e){empty(document.getElementById('ov-cards'),'总览加载失败：'+e.message);return;}
+  const p=ovData;
+  // 状态点：completed 灰点，其他绿色脉冲。
+  const dot=document.getElementById('status-dot');
+  if(p.status==='completed'){dot.classList.remove('run');}
+  else{dot.classList.add('run');}
+  // 副标题
+  const sub=document.getElementById('ov-subtitle');
+  sub.textContent='';
+  sub.append(document.createTextNode((p.status||'未完成')+' · '+(p.task||'—')+' · 交付候选 '+(p.candidate||'—')+(p.primary?' · 主指标 '+p.primary:'')));
+  // 四张卡
+  const cards=document.getElementById('ov-cards');
+  cards.innerHTML='';
+  if(!p.available){empty(cards,p.note||'无 summary.json');return;}
+  // 卡1：主指标
+  const c1=el('div','card stat');
+  c1.append(el('span','label','主指标 '+(p.primary||'—')+'（均值 ± 逐样本标准差）'));
+  const v1=el('span','value');
+  v1.append(document.createTextNode(fmt(p.primary_mean)));
+  if(p.primary_sd>0){const sm=el('small','','±'+fmt(p.primary_sd,3));sm.style.fontSize='13px';sm.style.color='var(--muted)';v1.append(sm);}
+  c1.append(v1);
+  if(p.verdict&&p.verdict.available&&p.verdict.delta){c1.append(el('span','sub','Δ '+fmt(p.verdict.delta)+'（详见 ④ 交付门禁）'));}
+  // 卡2：各指标均值
+  const c2=el('div','card stat');
+  c2.append(el('span','label','全部指标均值'));
+  const v2=el('span','value',String(Object.keys(p.metric_means||{}).length)+' 项');
+  c2.append(v2);
+  const sub2=el('span','sub');
+  sub2.textContent=Object.keys(p.metric_means||{}).sort().map(k=>k+' '+fmt(p.metric_means[k])).join(' · ');
+  c2.append(sub2);
+  // 卡3：token 预算
+  const c3=el('div','card stat');
+  c3.append(el('span','label','token 预算'));
+  const meter3=el('div','meter');const bar3=el('div','bar');const fill3=el('div','fill');
+  const cap3=el('div','cap');
+  const bl=p.budget||[];const tok=bl.find(r=>r.label==='executor');
+  if(tok){
+    const total=tok.detail.match(/total=(\d+)/);
+    const lim=parseInt(tok.limit,10);
+    cap3.append(el('span','',total?total[1]+' / '+(isNaN(lim)?'不限':lim):tok.detail));
+    if(!isNaN(lim)&&total)fill3.style.width=Math.min(100,parseInt(total[1],10)/lim*100)+'%';
+    cap3.append(el('span','',tok.remaining==='—'?'—':'余 '+tok.remaining));
+  }else{cap3.append(el('span','','无预算快照'));}
+  bar3.append(fill3);meter3.append(bar3,cap3);c3.append(meter3);
+  if(p.judge){c3.append(el('span','sub','判分（RoleJudge）单列 total='+p.judge.total));}
+  // 卡4：评估次数 / 失败
+  const c4=el('div','card stat');
+  c4.append(el('span','label','评估次数'));
+  const ev4=bl.find(r=>r.label==='评估次数');
+  const v4=el('span','value',ev4?ev4.detail.replace('已消耗 ',''):'—');
+  c4.append(v4);
+  const sub4=el('span','sub');
+  const failed=(p.samples||[]).filter(s=>s.error);
+  sub4.textContent='失败样本 '+failed.length+' · 上限 '+(ev4?ev4.limit:'—')+' · 余 '+ (ev4?ev4.remaining:'—');
+  c4.append(sub4);
+  cards.append(c1,c2,c3,c4);
+  // 失败样本
+  const fs=document.getElementById('fail-samples');
+  if(failed.length===0){fs.textContent='失败样本：无';}
+  else{fs.innerHTML='';fs.appendChild(el('b','','失败样本 '+failed.length+'：'));fs.append(document.createTextNode(failed.map(s=>s.sample_id+'（'+s.error.slice(0,60)+'）').join('；')));}
+  // trace 链接
+  document.getElementById('trace-link').href='/runs/'+RUN+'/trace';
+}
+
+/* --- ① 轮次趋势（SVG 动态绘制） --- */
+async function loadTrend(){
+  const box=document.getElementById('trend-chart');
+  const tbl=document.getElementById('trend-table');
+  let tr;
+  try{tr=await api('trend');}catch(e){empty(box,'趋势加载失败：'+e.message);return;}
+  if(!tr.available){empty(box,tr.note||'无优化工件');empty(tbl,'无优化工件');return;}
+  const pts=tr.points||[];
+  if(pts.length===0){empty(box,'无轮次数据');return;}
+  // SVG: 640×250, y = 270 - v*240
+  const svgNS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(svgNS,'svg');
+  svg.setAttribute('viewBox','0 0 640 250');svg.setAttribute('width','100%');
+  svg.setAttribute('role','img');
+  svg.setAttribute('aria-label','折线图：每轮最优 '+tr.primary+'，误差条为逐样本标准差均值');
+  // 网格
+  for(const g of [1.00,0.80,0.60,0.40,0.20]){
+    const y=270-g*240;
+    const line=document.createElementNS(svgNS,'line');
+    line.setAttribute('x1',50);line.setAttribute('y1',y);line.setAttribute('x2',620);line.setAttribute('y2',y);
+    line.setAttribute('class','gridline');svg.append(line);
+    const txt=document.createElementNS(svgNS,'text');
+    txt.setAttribute('x',16);txt.setAttribute('y',y+4);txt.setAttribute('class','axis');
+    txt.textContent=g.toFixed(2);svg.append(txt);
+  }
+  // 基线虚线（取 round 0 或第一个点作为基线）
+  const base=pts[0];
+  const yBase=270-base.primary_mean*240;
+  const baseLine=document.createElementNS(svgNS,'line');
+  baseLine.setAttribute('x1',50);baseLine.setAttribute('y1',yBase);baseLine.setAttribute('x2',620);baseLine.setAttribute('y2',yBase);
+  baseLine.setAttribute('stroke','#94A3B8');baseLine.setAttribute('stroke-width','2');
+  baseLine.setAttribute('stroke-dasharray','6 4');svg.append(baseLine);
+  const baseTxt=document.createElementNS(svgNS,'text');
+  baseTxt.setAttribute('x',520);baseTxt.setAttribute('y',yBase-6);baseTxt.setAttribute('class','series-label');
+  baseTxt.setAttribute('fill','#64748B');baseTxt.textContent='基线 '+fmt(base.primary_mean);svg.append(baseTxt);
+  // 折线（从第 2 个点起连）
+  if(pts.length>1){
+    const path=document.createElementNS(svgNS,'path');
+    let d='';
+    pts.forEach((p,i)=>{
+      const x=60+(560/Math.max(pts.length-1,1))*i;
+      const y=270-p.primary_mean*240;
+      d+=(i===0?'M':'L')+x.toFixed(1)+' '+y.toFixed(1)+' ';
+    });
+    path.setAttribute('d',d);path.setAttribute('stroke','#1E40AF');
+    path.setAttribute('stroke-width','2');path.setAttribute('fill','none');svg.append(path);
+  }
+  // 点 + 误差条
+  pts.forEach((p,i)=>{
+    const x=60+(560/Math.max(pts.length-1,1))*i;
+    const y=270-p.primary_mean*240;
+    if(p.sd>0){
+      const y1=270-(p.primary_mean+p.sd)*240,y2=270-(p.primary_mean-p.sd)*240;
+      const eb=document.createElementNS(svgNS,'line');
+      eb.setAttribute('x1',x);eb.setAttribute('y1',y1);eb.setAttribute('x2',x);eb.setAttribute('y2',y2);
+      eb.setAttribute('stroke','#1E40AF');eb.setAttribute('stroke-width','1.5');svg.append(eb);
+    }
+    const c=document.createElementNS(svgNS,'circle');
+    c.setAttribute('cx',x);c.setAttribute('cy',y);c.setAttribute('r',i===pts.length-1?5:4);
+    c.setAttribute('fill',i===pts.length-1?'#1E40AF':'#1E40AF');svg.append(c);
+    const lbl=document.createElementNS(svgNS,'text');
+    lbl.setAttribute('x',x-8);lbl.setAttribute('y',30);lbl.setAttribute('class','axis');
+    lbl.textContent=p.round===0?'基线':'R'+p.round;svg.append(lbl);
+  });
+  box.innerHTML='';box.append(svg);
+  // 数据表
+  const table=el('table');
+  table.innerHTML='<thead><tr><th>轮次</th><th class="num">最优 '+tr.primary+'</th><th class="num">±sd</th><th>候选</th></tr></thead>';
+  const tb=el('tbody');
+  pts.forEach(p=>{
+    const r=el('tr');
+    r.append(el('td','',p.round===0?'基线':'R'+p.round));
+    const td1=el('td','num',fmt(p.primary_mean));r.append(td1);
+    r.append(el('td','num',p.sd>0?'±'+fmt(p.sd,3):'—'));
+    r.append(el('td','',p.best_id+'（'+p.operator+'）'));
+    tb.append(r);
+  });
+  table.append(tb);tbl.innerHTML='';tbl.append(table);
+}
+
+/* --- SSE 事件流 --- */
 const feed=document.getElementById('feed');
 let paused=false;
 const seen=new Set();
@@ -623,8 +531,9 @@ btn.addEventListener('click',()=>{
   btn.lastChild.textContent=paused?' 恢复滚动':' 暂停滚动';
 });
 function evtBody(ev){
-  let body=ev.type;
+  let body='';
   if(ev.sample_id)body+=' '+ev.sample_id;
+  if(ev.detail&&ev.detail.candidate)body+=' '+ev.detail.candidate;
   if(ev.scores){
     body+=' · '+Object.keys(ev.scores).sort().map(k=>k+' '+Number(ev.scores[k]).toFixed(2)).join(' / ');
   }
@@ -636,23 +545,16 @@ function evtBody(ev){
 }
 function renderEvt(ev){
   const key=JSON.stringify(ev);
-  if(seen.has(key))return; // 断线重连会整段重放，按键去重
+  if(seen.has(key))return;
   seen.add(key);
-  const el=document.createElement('div');
-  el.className='evt';
-  const t=document.createElement('t');
-  t.textContent=new Date(ev.time).toTimeString().slice(0,8);
-  const body=document.createElement('span');
-  body.className='body';
-  const b=document.createElement('b');
-  b.textContent=ev.type;
-  body.textContent='';
-  body.appendChild(b);
-  body.appendChild(document.createTextNode(evtBody(ev).slice(ev.type.length)));
-  const tok=document.createElement('t');
-  tok.textContent=ev.usage?((ev.usage.prompt_tokens+ev.usage.completion_tokens)+' tok'):'—';
-  el.appendChild(t);el.appendChild(body);el.appendChild(tok);
-  feed.prepend(el);
+  const div=el('div','evt');
+  const t=el('t','',new Date(ev.time).toTimeString().slice(0,8));
+  const body=el('span','body');
+  body.append(el('b','',ev.type));
+  body.append(document.createTextNode(evtBody(ev)));
+  const tok=el('t','',ev.usage?((ev.usage.prompt_tokens+ev.usage.completion_tokens)+' tok'):'—');
+  div.append(t,body,tok);
+  feed.prepend(div);
   while(feed.children.length>9)feed.lastChild.remove();
 }
 const es=new EventSource('/runs/'+document.body.dataset.run+'/events');
@@ -662,7 +564,237 @@ es.onmessage=e=>{
   if(ev.type==='run_done')es.close();
 };
 
-/* 采纳：接既有 POST /runs/{id}/adopt（表单 candidate=<id>，不另造协议） */
+/* --- ② 热力表 --- */
+async function loadHeatmap(){
+  const box=document.getElementById('heat-table');
+  let hm;
+  try{hm=await api('heatmap');}catch(e){empty(box,'热力表加载失败：'+e.message);return;}
+  const sub=document.getElementById('fr-subtitle');
+  if(!hm.available){empty(box,hm.note||'无 frontier.json');sub.textContent=hm.note||'无优化工件';return;}
+  sub.textContent=(hm.sample_ids||[]).length+' 个样本 × '+(hm.members||[]).length+' 前沿候选 · 单元格 = 逐样本 '+hm.primary+' 均值 ± 标准差 · 绿框 = 该样本最优';
+  const table=el('table','heat');
+  // thead
+  const thead=el('thead');const hr=el('tr');
+  hr.append(el('th','rowhead','样本'));
+  (hm.members||[]).forEach(m=>{
+    const th=el('th');
+    th.append(el('span','',m.id));
+    const sm=el('small','',(m.is_baseline?'基线':(m.is_best?'均值最优':'R'+m.round+' · '+m.operator)));
+    sm.style.fontWeight='400';th.append(sm);
+    hr.append(th);
+  });
+  thead.append(hr);table.append(thead);
+  // tbody
+  const tbody=el('tbody');
+  (hm.rows||[]).forEach(row=>{
+    const tr=el('tr');
+    tr.append(el('th','rowhead',row.sample_id));
+    row.cells.forEach(cell=>{
+      const td=el('td','cell');
+      const span=el('span','',fmt(cell.score,2));
+      if(cell.win)span.classList.add('win');
+      if(cell.near_noise)td.classList.add('near-noise');
+      span.style.padding='2px 8px';span.style.display='inline-block';
+      td.append(span);
+      if(cell.sd>0){td.append(el('span','sd','±'+fmt(cell.sd,2)));}
+      tr.append(td);
+    });
+    tbody.append(tr);
+  });
+  table.append(tbody);
+  // tfoot
+  const tfoot=el('tfoot');
+  const fr1=el('tr');
+  fr1.append(el('td','',hm.primary+' 均值'));
+  hm.members.forEach(m=>{fr1.append(el('td','num',fmt(m.primary_mean)));});
+  tfoot.append(fr1);
+  if(hm.constraint&&hm.constraint_row){
+    const fr2=el('tr');
+    fr2.append(el('td','',hm.constraint+'（约束）'));
+    hm.constraint_row.forEach(v=>{fr2.append(el('td','num',fmt(v,2)));});
+    tfoot.append(fr2);
+  }
+  table.append(tfoot);
+  box.innerHTML='';box.append(table);
+}
+
+/* --- ② 采纳决策 --- */
+async function loadAdoptInfo(){
+  if(!ovData)return;
+  const p=ovData;
+  const candDd=document.getElementById('adopt-cand');
+  candDd.textContent=p.candidate||'（无交付候选）';
+  const deltaDd=document.getElementById('adopt-delta');
+  if(p.verdict&&p.verdict.available){
+    deltaDd.textContent=p.verdict.title+' · '+p.verdict.detail;
+    deltaDd.className=p.verdict.state==='confident_pass'||p.verdict.state==='pass'?'delta-up':(p.verdict.state==='regressed'?'':'');
+  }else{deltaDd.textContent='未过门禁 —— 尚未运行 verify';}
+  const usageDd=document.getElementById('adopt-usage');
+  const bl=p.budget||[];const tok=bl.find(r=>r.label==='executor');
+  usageDd.textContent=tok?tok.detail:'无预算快照';
+}
+
+/* --- ② 谱系 --- */
+async function loadLineage(){
+  const box=document.getElementById('lineage-table');
+  let ln;
+  try{ln=await api('lineage');}catch(e){empty(box,'谱系加载失败：'+e.message);return;}
+  if(!ln.available){empty(box,ln.note||'无优化工件');return;}
+  const table=el('table');
+  table.innerHTML='<thead><tr><th>候选</th><th>轮次</th><th>来源</th><th class="num">主指标均值</th><th>判定</th><th>vs baseline</th></tr></thead>';
+  const tb=el('tbody');
+  (ln.rows||[]).forEach(r=>{
+    const tr=el('tr');
+    tr.append(el('td','',r.id));
+    tr.append(el('td','num',String(r.round)));
+    tr.append(el('td','',r.origin));
+    tr.append(el('td','num',fmt(r.primary_mean)));
+    tr.append(el('td','',r.label+(r.incomplete?'（预算中断）':'')));
+    tr.append(el('td','',r.dom_label||'—'));
+    tb.append(tr);
+  });
+  table.append(tb);box.innerHTML='';box.append(table);
+}
+
+/* --- ③ 样本证据 --- */
+async function loadSamples(){
+  if(!ovData)return;
+  const box=document.getElementById('sample-table');
+  const samples=ovData.samples||[];
+  if(samples.length===0){empty(box,'无样本 trace');return;}
+  const table=el('table');
+  table.innerHTML='<thead><tr><th>样本</th><th class="num">状态</th><th>分数</th><th>逐次采样</th><th>错误</th></tr></thead>';
+  const tb=el('tbody');
+  samples.forEach(s=>{
+    const tr=el('tr');
+    // 样本 ID 链接 trace 浏览器
+    const td=el('td');
+    const a=el('a','',s.sample_id);a.href='/runs/'+RUN+'/trace';
+    td.append(a);tr.append(td);
+    // 状态
+    tr.append(el('td',s.error?'num bad':'num',s.error?'失败':'完成'));
+    // 分数
+    const sc=el('td');
+    const names=Object.keys(s.scores||{}).sort();
+    sc.textContent=names.map(k=>k+' '+fmt(s.scores[k])).join(' / ');
+    tr.append(sc);
+    // rep-strip（逐次采样分数）
+    const rep=el('td');
+    if(s.rep_scores&&s.rep_scores.length>1){
+      const strip=el('div','rep-strip');
+      const prim=ovData.primary||names[0]||'f1';
+      s.rep_scores.forEach(rs=>{
+        const v=rs[prim]||0;
+        const bar=el('div','rep');
+        bar.style.height=Math.max(4,v*100)+'%';
+        bar.append(el('span','',fmt(v,2)));
+        strip.append(bar);
+      });
+      rep.append(strip);
+    }else if(s.rep_scores&&s.rep_scores.length===1){rep.textContent='1 rep';}
+    else{rep.textContent='—';}
+    tr.append(rep);
+    // 错误
+    tr.append(el('td','',s.error?s.error.slice(0,80):'—'));
+    tb.append(tr);
+  });
+  table.append(tb);box.innerHTML='';box.append(table);
+}
+
+/* --- ④ 交付门禁 --- */
+async function loadVerify(){
+  const ciBox=document.getElementById('ci-chart');
+  const diffBox=document.getElementById('diff-table');
+  const ecBox=document.getElementById('exit-codes');
+  const adoptDd=document.getElementById('vf-adopted');
+  let vp;
+  try{vp=await api('verify');}catch(e){empty(ciBox,'门禁加载失败：'+e.message);return;}
+  // 退出码契约表
+  const ecTable=el('table','exit-codes');
+  const ecBody=el('tbody');
+  (vp.exit_codes||[]).forEach(r=>{
+    const tr=el('tr');tr.append(el('td','',String(r.code)));tr.append(el('td','',r.label));
+    ecBody.append(tr);
+  });
+  ecTable.append(ecBody);ecBox.innerHTML='';ecBox.append(ecTable);
+  // 采纳状态
+  if(ovData&&ovData.verdict&&ovData.verdict.available){
+    adoptDd.textContent=ovData.candidate+'（verify 交付候选）';
+  }else{adoptDd.textContent='未采纳';}
+  // 无 verify 工件
+  if(!vp.available||!vp.report){
+    empty(ciBox,vp.note||'无 verify 工件');
+    empty(diffBox,vp.note||'无配对差分数据');
+    return;
+  }
+  const reg=vp.report.regression;
+  const ci=reg.ci;
+  // CI SVG
+  if(ci){
+    const svgNS='http://www.w3.org/2000/svg';
+    const svg=document.createElementNS(svgNS,'svg');
+    svg.setAttribute('viewBox','0 0 560 130');svg.setAttribute('width','100%');
+    svg.setAttribute('role','img');
+    svg.setAttribute('aria-label','配对自助法置信区间图：Δ='+fmt(reg.delta)+'，CI ['+fmt(ci.lo)+', '+fmt(ci.hi)+']，判定 '+ci.verdict);
+    // 零线 x=285; 网格
+    const grid=document.createElementNS(svgNS,'line');
+    grid.setAttribute('x1',40);grid.setAttribute('y1',60);grid.setAttribute('x2',530);grid.setAttribute('y2',60);
+    grid.setAttribute('class','gridline');svg.append(grid);
+    const zero=document.createElementNS(svgNS,'line');
+    zero.setAttribute('x1',285);zero.setAttribute('y1',18);zero.setAttribute('x2',285);zero.setAttribute('y2',100);
+    zero.setAttribute('stroke','#64748B');zero.setAttribute('stroke-width','1.5');svg.append(zero);
+    const zeroTxt=document.createElementNS(svgNS,'text');
+    zeroTxt.setAttribute('x',281);zeroTxt.setAttribute('y',114);zeroTxt.setAttribute('class','axis');
+    zeroTxt.textContent='0';svg.append(zeroTxt);
+    // 阈值虚线（x = 285 - 0.05*700 = 250）
+    const th=document.createElementNS(svgNS,'line');
+    th.setAttribute('x1',250);th.setAttribute('y1',18);th.setAttribute('x2',250);th.setAttribute('y2',100);
+    th.setAttribute('stroke','#D97706');th.setAttribute('stroke-width','1.5');th.setAttribute('stroke-dasharray','5 4');svg.append(th);
+    const thTxt=document.createElementNS(svgNS,'text');
+    thTxt.setAttribute('x',222);thTxt.setAttribute('y',114);thTxt.setAttribute('class','axis');
+    thTxt.textContent='-0.05 阈值';svg.append(thTxt);
+    // CI 线段 x = 285 + v*700
+    const x1=285+ci.lo*700,x2=285+ci.hi*700;
+    const ciLine=document.createElementNS(svgNS,'line');
+    ciLine.setAttribute('x1',x1);ciLine.setAttribute('y1',60);ciLine.setAttribute('x2',x2);ciLine.setAttribute('y2',60);
+    ciLine.setAttribute('stroke',ci.verdict==='regressed'?'#DC2626':(ci.verdict==='confident_pass'?'#15803D':'#64748B'));
+    ciLine.setAttribute('stroke-width','6');ciLine.setAttribute('stroke-linecap','round');svg.append(ciLine);
+    const ciDot=document.createElementNS(svgNS,'circle');
+    ciDot.setAttribute('cx',285+reg.delta*700);ciDot.setAttribute('cy',60);ciDot.setAttribute('r',6);
+    ciDot.setAttribute('fill','#0F2547');svg.append(ciDot);
+    const ciLbl=document.createElementNS(svgNS,'text');
+    ciLbl.setAttribute('x',x1);ciLbl.setAttribute('y',42);
+    ciLbl.setAttribute('style','font-size:12px;font-weight:600');
+    ciLbl.setAttribute('fill',ci.verdict==='regressed'?'#DC2626':(ci.verdict==='confident_pass'?'#15803D':'#475569'));
+    ciLbl.textContent='CI ['+fmt(ci.lo)+', '+fmt(ci.hi)+'] · '+ci.verdict;svg.append(ciLbl);
+    const sub=document.createElementNS(svgNS,'text');
+    sub.setAttribute('x',x1);sub.setAttribute('y',92);sub.setAttribute('class','axis');
+    sub.textContent='均值 Δ='+fmt(reg.delta)+' · B='+ci.b;svg.append(sub);
+    ciBox.innerHTML='';ciBox.append(svg);
+  }else{
+    empty(ciBox,'无 CI（未跑配对自助法）——均值差判定见横幅');
+  }
+  // 配对差分表
+  if(vp.diff_rows&&vp.diff_rows.length>0){
+    const table=el('table');
+    table.innerHTML='<thead><tr><th>样本</th><th class="num">基线</th><th class="num">交付</th><th class="num">D = 基线−交付</th></tr></thead>';
+    const tb=el('tbody');
+    vp.diff_rows.forEach(r=>{
+      const tr=el('tr');
+      tr.append(el('td','',r.sample_id));
+      tr.append(el('td','num',fmt(r.baseline)));
+      tr.append(el('td','num',fmt(r.delivered)));
+      const dTd=el('td','num',fmt(r.d));
+      if(r.d<0)dTd.style.color='var(--ok)';
+      if(r.d>0)dTd.style.color='var(--danger)';
+      tr.append(dTd);
+      tb.append(tr);
+    });
+    table.append(tb);diffBox.innerHTML='';diffBox.append(table);
+  }else{empty(diffBox,'无配对差分数据');}
+}
+
+/* --- 采纳 --- */
 const adopt=document.getElementById('adopt-btn');
 adopt.addEventListener('click',async()=>{
   const id=adopt.dataset.candidate;
@@ -679,6 +811,17 @@ adopt.addEventListener('click',async()=>{
     else{adopt.disabled=false;adopt.textContent='采纳失败（HTTP '+r.status+'）';}
   }catch(err){adopt.disabled=false;adopt.textContent='采纳失败：'+err;}
 });
+
+/* --- 启动加载 --- */
+(async()=>{
+  await loadOverview();
+  loadTrend();
+  loadAdoptInfo();
+  loadHeatmap();
+  loadLineage();
+  loadSamples();
+  loadVerify();
+})();
 </script>
 
 {{define "verdict_banner"}}

@@ -30,7 +30,7 @@ func (s *Server) registerSettingsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /settings", s.handleSettings)
 }
 
-// settingsView backs settings.html.
+// settingsView backs settings_shell.html.
 type settingsView struct {
 	// Snapshot marks the data source: true = 本次 run 的快照（含 flag 来
 	// 源）；false = serve 回落的「当前环境」链。
@@ -73,7 +73,11 @@ type gapGuide struct {
 // handleSettings renders the read-only page. 损坏文件不 500：把错误摆上
 // 页面正是引导职责（命中文件损坏在 run/verify 侧是硬错退出 1）。
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	render(w, "settings.html", s.settingsPage())
+	v := s.settingsPage()
+	render(w, "settings_shell.html", struct {
+		shellView
+		settingsView
+	}{shellView{Title: "设置", Active: "settings"}, v})
 }
 
 // settingsPage assembles the view: run --web 的快照优先，serve 回落全局

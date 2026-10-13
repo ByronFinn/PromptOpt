@@ -70,7 +70,10 @@ func (s *Server) handleDiffPage(w http.ResponseWriter, r *http.Request) {
 			v.Same++
 		}
 	}
-	render(w, "diff.html", v)
+	render(w, "diff.html", struct {
+		shellView
+		diffPageView
+	}{shellView{Title: "候选 diff", Active: "runs"}, v})
 }
 
 // memberSummary renders "operator @ round" for the selects and
@@ -220,7 +223,10 @@ func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, c.ID)
 	}
 	if len(ids) == 0 {
-		render(w, "compare.html", comparePageView{})
+		render(w, "compare.html", struct {
+			shellView
+			comparePageView
+		}{shellView{Title: "run 对比", Active: "runs"}, comparePageView{}})
 		return
 	}
 	q := r.URL.Query()
@@ -236,7 +242,10 @@ func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
 	v.SideB = s.compareSide(b)
 	v.buildMetricRows()
 	v.buildUsageRows()
-	render(w, "compare.html", v)
+	render(w, "compare.html", struct {
+		shellView
+		comparePageView
+	}{shellView{Title: "run 对比", Active: "runs"}, v})
 }
 
 // compareSide loads one run's summary + frontier view.

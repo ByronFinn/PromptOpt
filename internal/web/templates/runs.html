@@ -1,0 +1,122 @@
+{{template "shell_head" .}}
+</head>
+<body>
+<div class="shell">
+{{template "shell_sidebar" .}}
+<main class="main">
+  <div class="page-head">
+    <div>
+      <div class="crumbs">工作区 / Runs</div>
+      <h1>Runs</h1>
+      <p>{{if .Live}}实时评估模式：实时事件流已连接{{else}}勾选 ≥2 个 run 后可发起对比{{end}}</p>
+    </div>
+  </div>
+
+  {{if .Live}}
+  <div id="checkpoint-banner" hidden class="card" style="margin:0 0 14px">
+    ⏸ <strong>合成集等待审核</strong>：<a id="checkpoint-link" href="#">打开审核页</a>
+    （检查样本、增删改后批准，或直接编辑 synth/&lt;run_id&gt;/checkpoint.json）
+  </div>
+  <div id="live-status" style="font-size:13px;color:var(--muted)">等待事件…</div>
+  {{end}}
+
+  <div class="filters">
+    <input id="q" placeholder="搜索 run id / 任务 / task_key" aria-label="搜索 runs" style="min-width:260px">
+    <select id="f-status" aria-label="状态筛选">
+      <option value="">状态：全部</option><option value="ok">已完成</option><option value="bad">失败</option><option value="warn">预算耗尽</option>
+    </select>
+    <button class="btn btn-primary" id="compare-btn" disabled>对比（勾选 ≥2 个 run）</button>
+  </div>
+
+  {{if .Runs}}
+  <div class="card table-card">
+    <table id="runs-table">
+      <thead><tr>
+        <th style="width:28px"><input type="checkbox" id="sel-all" aria-label="全选"></th>
+        <th>Run</th><th>任务 / task_key</th><th>状态</th><th>主指标</th><th>评估</th><th>exit</th><th>开始时间</th><th>操作</th>
+      </tr></thead>
+      <tbody>
+      {{range .Runs}}
+        <tr data-id="{{.ID}}" data-status="{{.StatusClass}}" data-search="{{.ID}} {{.Task}} {{.TaskKey}} {{.Candidate}} {{.Dataset}}">
+          <td><input type="checkbox" class="row-sel" value="{{.ID}}" aria-label="选择 {{.ID}}"></td>
+          <td><a class="num" href="/runs/{{.ID}}/dashboard">{{.ID}}</a></td>
+          <td>{{.Task}}{{if .TaskKey}} <span class="num" style="color:var(--muted)">· {{.TaskKey}}</span>{{end}}</td>
+          <td><span class="badge {{.StatusClass}}">{{.Status}}</span></td>
+          <td>{{if .Metrics}}{{range $i, $m := .Metrics}}{{if $i}} · {{end}}<span class="num">{{$m.Name}}={{$m.Value}}</span>{{end}}{{else}}—{{end}}</td>
+          <td class="num">{{.Evaluated}}/{{.Total}}</td>
+          <td class="num">{{.ExitCode}}</td>
+          <td class="num">{{.Started}}</td>
+          <td><a href="/runs/{{.ID}}/dashboard">工作区</a></td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <div class="empty">暂无历史 run</div>
+  {{end}}
+</main>
+</div>
+
+{{if .Live}}
+<script>
+/* 实时事件流（原 index 逻辑平移） */
+const rows={};
+function row(id){
+  let tr=rows[id];
+  if(!tr){
+    tr=document.createElement('tr');
+    tr.innerHTML='<td class="mono"></td><td class="dim">评估中…</td><td></td><td></td><td></td>';
+    tr.children[0].textContent=id;
+    rows[id]=tr;
+    document.querySelector('#runs-table tbody').appendChild(tr);
+  }
+  return tr;
+}
+document.getElementById('checkpoint-link')?.addEventListener('click',e=>{
+  e.preventDefault();
+  // checkpoint 事件携带 Detail.ID（与旧 index 相同契约）
+  if(window._lastCheckpoint)location.href='/synth/'+window._lastCheckpoint;
+});
+const es=new EventSource('/events');
+es.onmessage=e=>{
+  const ev=JSON.parse(e.data);
+  if(ev.type==='checkpoint'){
+    window._lastCheckpoint=ev.detail.id;
+    document.getElementById('checkpoint-banner').hidden=false;
+  }
+};
+window.addEventListener('beforeunload',()=>es.close());
+</script>
+{{end}}
+<script>
+/* 筛选 + 勾选对比 */
+const q=document.getElementById('q'),fs=document.getElementById('f-status'),cmp=document.getElementById('compare-btn');
+function applyFilter(){
+  const term=(q.value||'').toLowerCase(),st=fs.value;
+  document.querySelectorAll('#runs-table tbody tr').forEach(tr=>{
+    const hitS=!term||tr.dataset.search.toLowerCase().includes(term);
+    const hitF=!st||tr.dataset.status===st;
+    tr.style.display=hitS&&hitF?'':'none';
+  });
+}
+q?.addEventListener('input',applyFilter);
+fs?.addEventListener('change',applyFilter);
+function updateCmp(){
+  const n=document.querySelectorAll('.row-sel:checked').length;
+  cmp.disabled=n<2;
+  cmp.textContent=n<2?'对比（勾选 ≥2 个 run）':'对比已选 '+n+' 个 run';
+}
+document.addEventListener('change',e=>{
+  if(e.target.id==='sel-all'){
+    document.querySelectorAll('.row-sel').forEach(c=>{c.checked=e.target.checked;});
+  }
+  updateCmp();
+});
+cmp?.addEventListener('click',()=>{
+  const ids=[...document.querySelectorAll('.row-sel:checked')].map(c=>c.value);
+  if(ids.length>=2)location.href='/compare?a='+encodeURIComponent(ids[0])+'&b='+encodeURIComponent(ids[1]);
+});
+</script>
+</body>
+</html>
