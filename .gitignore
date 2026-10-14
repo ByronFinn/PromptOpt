@@ -82,3 +82,6 @@ outputs/
 
 # Local smoke-run mirrors (remote fixtures, never committed)
 /.smoke-config/
+
+# Local design assets (icon path references, never committed)
+/.design-assets/

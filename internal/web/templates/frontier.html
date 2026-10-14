@@ -17,7 +17,9 @@
 {{end}}
 {{template "shell_head" .}}
 </head>
+<script src="/static/htmx.min.js"></script>
 <body>
+{{template "icon_sprite" .}}
 <div class="shell">
 {{template "shell_sidebar" .}}
 <main class="main">
@@ -57,7 +59,7 @@
     {{template "adopt_panel" .Adopt}}
   </div>
 
-  <h2 style="font-size:13px;color:var(--muted);margin:var(--space-5) 0 var(--space-3);font-weight:600;letter-spacing:.04em;text-transform:uppercase">候选卡片（{{len .Members}}）</h2>
+  <h2 style="font-size:13px;color:var(--muted);margin:var(--space-5) 0 var(--space-3);font-weight:600;letter-spacing:.04em;text-transform:uppercase">{{icon "i-layers" 14}} 候选卡片（{{len .Members}}）</h2>
   <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(21rem,1fr))">
   {{range .Members}}
     <div class="card">
@@ -79,7 +81,7 @@
   </div>
 
   <div class="card" style="margin-top:var(--space-5)">
-    <h2>per-sample 热力表</h2>
+    <h2>{{icon "i-grid" 14}} per-sample 热力表</h2>
     {{if .HasSampleIDs}}
     <div style="overflow-x:auto">
     <table class="heat">
@@ -88,7 +90,7 @@
       {{range .Members}}
         <tr>
           <td class="rowhead num">{{.ID}}{{if .IsBest}} ★{{end}}</td>
-          {{range .Cells}}<td style="background:{{.Color}}">{{.Value}}</td>{{end}}
+          {{range .Cells}}<td class="cell"{{if .Alpha}} style="--ca:{{.Alpha}}"{{end}}>{{.Value}}</td>{{end}}
           {{if not .Cells}}{{range $.SampleIDs}}<td style="color:var(--muted)">—</td>{{end}}{{end}}
         </tr>
       {{end}}

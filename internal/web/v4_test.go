@@ -152,15 +152,15 @@ func TestFrontierPageRenders(t *testing.T) {
 	}
 	for _, want := range []string{
 		"s1", "s2", // heat table column headers from sample_ids
-		"rgba(26,127,55,", // inline server-side heat color
-		"互不支配",            // pairwise non-domination annotation
-		"Top-1",           // best card badge
-		"未准入",             // g02 lineage verdict
-		"被 baseline 支配",   // g02 dominance mark via engine.Dominates
-		"预算中断·评估不完整",      // g03 incomplete mark
-		"重写",              // operator label
-		"独占占优",            // wins column
-		"尚未采纳",            // adopt panel initial state
+		"--ca:0.",       // heat cell alpha via heatAlpha (CSS holds color, Go holds lightness)
+		"互不支配",          // pairwise non-domination annotation
+		"Top-1",         // best card badge
+		"未准入",           // g02 lineage verdict
+		"被 baseline 支配", // g02 dominance mark via engine.Dominates
+		"预算中断·评估不完整",    // g03 incomplete mark
+		"重写",            // operator label
+		"独占占优",          // wins column
+		"尚未采纳",          // adopt panel initial state
 	} {
 		if !strings.Contains(res.Body, want) {
 			t.Errorf("frontier page missing %q", want)

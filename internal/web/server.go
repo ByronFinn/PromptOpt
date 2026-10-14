@@ -37,7 +37,7 @@ var templateFS embed.FS
 var staticFS embed.FS
 
 // templates are parsed once; they are read-only afterwards.
-var templates = template.Must(template.ParseFS(templateFS, "templates/*.html"))
+var templates = template.Must(template.New("").Funcs(fmap).ParseFS(templateFS, "templates/*.html"))
 
 // subscriberBuffer bounds the per-client event backlog. Publishers
 // never block on slow clients: excess events are dropped and the

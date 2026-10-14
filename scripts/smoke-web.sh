@@ -6,13 +6,18 @@
 # curl 断言：
 #   1. dashboard 整页 200：<style> 设计令牌同源锚点 + 关键类名
 #     （.topbar/.heat/.verdict）+ 四视图锚点（view-overview/frontier/
-#      trace/verify）；
+#      trace/verify）+ sprite/热力双源计数断言（<style> 恰 1 块、
+#      i-brand 在位、rgba(var(--heat-rgb),var(--ca,0)) 恰 1 处）；
 #   2. 五数据端点 200 且关键 JSON 键在位（overview/trend/heatmap/
-#      lineage/verify）；
+#      lineage/verify；trend/heatmap/lineage 容器键为 omitempty 条件键，
+#      仅对带 frontier.json 的 run 断言，RUN_ID 选择优先带工件 run）；
 #   3. adopt 端点存在性（POST 未知候选 → 404，路由在而非 405）；
 #   4. 设置引导页（PRD-0001 D6）：GET /settings 200 + serve 模式「当前
 #      环境」语义横幅 + 恒掩码 + 生效配置表；POST /settings → 405（只
-#      读，无写端点）。
+#      读，无写端点）；
+#   5. frontier 看板 200：热力双源渲染（--ca:0. 或 class="cell"）+
+#      htmx 在位；pool_warning 条件断言（manifest 带该键时 overview
+#      须含同键）。
 #
 # 像素级视觉复核留浏览器人工（本脚本只做结构/CSS 同源断言）。
 # 前置：先跑过至少一次 run（~/promptopt-smoke/runs/ 非）；无 run 时
@@ -40,7 +45,10 @@ if [[ "${SKIP_REMOTE:-0}" == "1" ]]; then
   echo "[dry-run] 参数展开："
   echo "  BIN=$BIN RUNS_DIR=$RUNS_DIR ADDR=$ADDR PORT=$PORT"
   echo "[dry-run] 计划断言：dashboard 200 + <style> 同源锚点 + .topbar/.heat/.verdict + 四视图锚点；"
-  echo "           /runs/{id}/api/{overview,trend,heatmap,lineage,verify} 200 + 关键 JSON 键；"
+  echo "           dashboard sprite/双源计数：<style> 恰 1 块 + <symbol id=\"i-brand\" 在位 + rgba(var(--heat-rgb),var(--ca,0)) 恰 1 处；"
+  echo "           /runs/{id}/api/{overview,trend,heatmap,lineage,verify} 200 + 关键 JSON 键（容器键仅对带 frontier.json 的 run 断言）；"
+  echo "           /runs/{id}/frontier 200 + 热力双源（--ca:0. 或 class=\"cell\"）+ htmx.min.js；"
+  echo "           pool_warning 条件断言（manifest 含该键时 overview 须含同键，否则跳过）；"
   echo "           POST /runs/{id}/adopt 未知候选 → 404；"
   echo "           GET /settings 200 + 当前环境语义 + ****** 掩码 + 生效配置表 + <style> 恰 1 块；"
   echo "           POST /settings → 405（只读无写端点）"
@@ -75,7 +83,16 @@ done
 curl -sf "$BASE/" >/dev/null || { echo "[smoke] serve 未就绪：$BASE"; exit 1; }
 echo "[smoke] serve 就绪：$BASE（-addr $ADDR -port $PORT）"
 
-RUN_ID="${RUN_ID:-$(ls "$RUNS_DIR" | sort | tail -1)}"
+# 优先选带 frontier.json 的最新 run：trend/heatmap/lineage 的容器键断言
+# 依赖优化工件（无工件 run 上端点 available=false 短路）；无带工件 run
+# 时回落最新 run，容器键断言走下方条件块 skip。
+if [[ -z "${RUN_ID:-}" ]]; then
+  # set -e 下循环体用 if 形式（[[ ]] && basename 的假条件会整体非零杀脚本）
+  RUN_ID="$(for d in "$RUNS_DIR"/*/; do
+    if [[ -f "$d/frontier.json" ]]; then basename "$d"; fi
+  done | sort | tail -1)"
+  [[ -n "$RUN_ID" ]] || RUN_ID="$(ls "$RUNS_DIR" | sort | tail -1)"
+fi
 [[ -n "$RUN_ID" ]] || { echo "[smoke] 无 run 目录可断言（SMOKE_SKIP_RUN=1 时属预期，跳过 per-run 断言）"; exit 0; }
 echo "[smoke] 目标 run：$RUN_ID"
 
@@ -94,17 +111,51 @@ for cls in 'class="topbar"' 'class="heat"' 'class="verdict' 'id="view-overview"'
 done
 check "事件流接 SSE（EventSource）" grep -q "EventSource(" <<<"$HTML"
 check "采纳接 adopt 端点（fetch）" grep -q "/adopt" <<<"$HTML"
+check "<style> 恰 1 块（每页一块惯例）" test "$(grep -c '<style>' <<<"$HTML")" = "1"
+check "icon sprite 在位（i-brand）" grep -q '<symbol id="i-brand"' <<<"$HTML"
+check "热力 CSS 持色恰 1 处（rgba(var(--heat-rgb),var(--ca,0))）" test "$(grep -c 'rgba(var(--heat-rgb),var(--ca,0))' <<<"$HTML")" = "1"
 
 echo "[smoke] 2) 数据端点"
 api_key() { curl -sf "$BASE/runs/$RUN_ID/api/$1" | grep -q "\"$2\""; }
 for kv in "overview:run_id" "overview:verdict" "overview:metric_means" \
-          "trend:points" "trend:available" \
-          "heatmap:members" "heatmap:rows" \
-          "lineage:rows" \
+          "trend:available" \
           "verify:exit_codes" "verify:available"; do
   ep="${kv%%:*}"; key="${kv##*:}"
   check "GET /api/$ep 含键 \"$key\"" api_key "$ep" "$key"
 done
+
+# trend:points / heatmap:members / heatmap:rows / lineage:rows 是 omitempty
+# 条件键：无 frontier.json 的 run 上端点 available=false 短路（正当行为，
+# 由上方 available 断言覆盖），仅对带优化工件的 run 断言完整载荷 schema。
+if [[ -f "$RUNS_DIR/$RUN_ID/frontier.json" ]]; then
+  for kv in "trend:points" "heatmap:members" "heatmap:rows" "lineage:rows"; do
+    ep="${kv%%:*}"; key="${kv##*:}"
+    check "GET /api/$ep 含键 \"$key\"（有 frontier.json）" api_key "$ep" "$key"
+  done
+else
+  echo "  skip: 目标 run 无 frontier.json（容器键在 available=false 下不输出）"
+fi
+
+# pool_warning 是 omitempty 条件键：仅当 manifest.json 带该键时断言
+# overview 透传同键（否则本 run 无预警，属正常路径）。
+if grep -q '"pool_warning"' "$RUNS_DIR/$RUN_ID/manifest.json" 2>/dev/null; then
+  check "manifest 带 pool_warning → overview 透传同键" api_key overview pool_warning
+else
+  echo "  skip: manifest 无 pool_warning（本 run 无候选池预警）"
+fi
+
+echo "[smoke] 2b) frontier 看板（热力双源渲染）"
+code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/runs/$RUN_ID/frontier")"
+check "GET /frontier 200" test "$code" = "200"
+FRONTIER_HTML="$(curl -sf "$BASE/runs/$RUN_ID/frontier")" || FRONTIER_HTML=""
+if grep -q -- '--ca:0\.' <<<"$FRONTIER_HTML"; then
+  echo "  ok: 热力格携带 --ca:0. 明度（SSR 双源 Go 半边）"
+elif grep -q 'class="cell"' <<<"$FRONTIER_HTML"; then
+  echo "  ok: 热力格 class=\"cell\" 在位（--ca 空的回退渲染，NaN/旧工件路径）"
+else
+  echo "  FAIL: frontier 热力双源渲染缺失"; fails=$((fails+1))
+fi
+check "frontier 页 htmx 在位（htmx.min.js）" grep -q "htmx.min.js" <<<"$FRONTIER_HTML"
 
 echo "[smoke] 3) adopt 端点存在性"
 code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/runs/$RUN_ID/adopt" --data 'candidate=__smoke_nonexistent__')"

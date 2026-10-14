@@ -97,7 +97,7 @@ func (s *Server) settingsPage() settingsView {
 		}
 	}
 	v := newSettingsView(config.EffectiveRows(disc), false)
-	v.Note = "当前环境的配置（发现序命中文件 + 环境变量 + 默认值）——不是某次 run 的现场，历史 run 的现场以各自 manifest 快照为准。页面只读；修改配置请用 promptopt config 子命令。"
+	v.Note = "当前环境的生效配置（发现序命中文件 + 环境变量 + 默认值）——不是某次 run 的现场，历史 run 的现场以各自 manifest 快照为准。页面只读；修改配置请用 promptopt config 子命令。"
 	v.HitPath, v.Shadowed = disc.Path, disc.Shadowed
 	return v
 }

@@ -1,0 +1,19 @@
+{{define "verdict_banner"}}
+<div class="verdict {{.Class}}">
+  <svg class="icon" width="34" height="34" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <use href="#i-{{.Icon}}"></use>
+  </svg>
+  <div>
+    <h3>{{.Title}}</h3>
+    <p>{{.Detail}}</p>
+  </div>
+</div>
+{{end}}
+
+{{define "empty_state"}}
+<div class="empty">{{.}}</div>
+{{end}}
+
+{{define "warn_strip"}}
+<div class="warn-strip">{{icon "i-warn" 14}} {{badge "warn" "池预警"}} <span>{{.PoolWarning}}</span></div>
+{{end}}

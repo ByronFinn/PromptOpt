@@ -1,6 +1,7 @@
 {{template "shell_head" .}}
 </head>
 <body data-run-id="{{.ID}}">
+{{template "icon_sprite" .}}
 <div class="shell">
 {{template "shell_sidebar" .}}
 <main class="main">
@@ -13,12 +14,12 @@
   </div>
 
   <div class="filters" style="margin-bottom:var(--space-5)">
-    <a class="btn btn-primary" href="/runs/{{.ID}}/dashboard">四视图看板</a>
-    <a class="btn" href="/runs/{{.ID}}/trace">trace 浏览器</a>
-    <a class="btn" href="/compare?a={{.ID}}">run 对比</a>
-    {{if .SynthURL}}<a class="btn" href="{{.SynthURL}}">合成集审核</a>{{end}}
-    {{if .HasFrontier}}<a class="btn" href="/runs/{{.ID}}/frontier">前沿看板</a>{{end}}
-    {{if .HasReport}}<a class="btn" href="/runs/{{.ID}}/report">优化报告</a>{{end}}
+    <a class="btn btn-primary" href="/runs/{{.ID}}/dashboard">{{icon "i-dashboard" 14}} 四视图看板</a>
+    <a class="btn" href="/runs/{{.ID}}/trace">{{icon "i-trace" 14}} trace 浏览器</a>
+    <a class="btn" href="/compare?a={{.ID}}">{{icon "i-compare" 14}} run 对比</a>
+    {{if .SynthURL}}<a class="btn" href="{{.SynthURL}}">{{icon "i-flask" 14}} 合成集审核</a>{{end}}
+    {{if .HasFrontier}}<a class="btn" href="/runs/{{.ID}}/frontier">{{icon "i-grid" 14}} 前沿看板</a>{{end}}
+    {{if .HasReport}}<a class="btn" href="/runs/{{.ID}}/report">{{icon "i-doc" 14}} 优化报告</a>{{end}}
   </div>
 
   <div class="card table-card">
@@ -66,7 +67,7 @@
       <span>executor tokens <span class="num" id="g-exec">0</span>{{if .LiveLimits.BudgetTokens}} / {{.LiveLimits.BudgetTokens}}{{end}}</span>
       <span>optimizer tokens <span class="num" id="g-opt">0</span>{{if .LiveLimits.BudgetOptTokens}} / {{.LiveLimits.BudgetOptTokens}}{{end}}</span>
       <span>评估次数 <span class="num" id="g-evals">0</span>{{if .LiveLimits.BudgetEvals}} / {{.LiveLimits.BudgetEvals}}{{end}}</span>
-      <span id="g-valve" style="color:var(--accent-ink)" hidden>⚠ 预算阀门已触发</span>
+      <span id="g-valve" style="color:var(--accent-ink)" hidden><svg class="ic" width="12" height="12" aria-hidden="true"><use href="#i-warn"></use></svg> 预算阀门已触发</span>
     </div>
   </div>
 

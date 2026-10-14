@@ -1,13 +1,14 @@
 {{template "shell_head" .}}
 </head>
 <body>
+{{template "icon_sprite" .}}
 <div class="shell">
 {{template "shell_sidebar" .}}
 <main class="main">
   <div class="page-head">
     <div>
       <div class="crumbs"><a href="/runs">Runs</a> / <a class="num" href="/runs/{{.ID}}/dashboard">{{.ID}}</a> / 候选 diff</div>
-      <h1>候选 diff <span class="num" style="font-size:15px;color:var(--muted)">{{.ID}}</span></h1>
+      <h1>{{icon "i-diff" 18}} 候选 diff <span class="num" style="font-size:15px;color:var(--muted)">{{.ID}}</span></h1>
       <p>并排比较提示词变更，保留新增 / 删除 / 逐行对应关系</p>
     </div>
   </div>
@@ -42,9 +43,9 @@
         {{if eq .Kind "same"}}
           <tr><td class="num" style="white-space:pre-wrap;word-break:break-word">{{.A}}</td><td class="num" style="white-space:pre-wrap;word-break:break-word">{{.B}}</td></tr>
         {{else if eq .Kind "add"}}
-          <tr><td></td><td class="num" style="background:#E4F6E9;white-space:pre-wrap;word-break:break-word">{{.B}}</td></tr>
+          <tr><td></td><td class="num" style="background:var(--diff-add-bg);white-space:pre-wrap;word-break:break-word">{{.B}}</td></tr>
         {{else}}
-          <tr><td class="num" style="background:#FDE4E4;white-space:pre-wrap;word-break:break-word">{{.A}}</td><td></td></tr>
+          <tr><td class="num" style="background:var(--diff-del-bg);white-space:pre-wrap;word-break:break-word">{{.A}}</td><td></td></tr>
         {{end}}
       {{end}}
       </tbody>

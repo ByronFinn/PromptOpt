@@ -48,6 +48,9 @@ type dashboardView struct {
 	// button (candidate id = frontier Best); nil when no frontier
 	// artifact exists (manual runs) — the button then degrades.
 	Adopt *dashboardAdopt
+	// PoolWarning 是 manifest.json 的跨 run 候选池退化预警（pool_warning
+	// 字段，cmd 侧 run 结束时追加写入）；非空时总览渲染 warn_strip。
+	PoolWarning string
 }
 
 // dashboardAdopt is the adopt button's server-side wiring.
@@ -60,11 +63,13 @@ type dashboardAdopt struct {
 // gateBanner is the gate banner rendered in both the overview top and
 // the 交付门禁 view (template "verdict_banner"). Class maps onto the
 // prototype's verdict color language: "" green (pass), "regress" red,
-// "inconclusive" gray.
+// "inconclusive" gray; Icon picks the sprite glyph (check-big / x-big /
+// minus-big) matching the state.
 type gateBanner struct {
 	Class  string
 	Title  string
 	Detail string
+	Icon   string
 }
 
 func (s *Server) handleDashboardPage(w http.ResponseWriter, r *http.Request) {
@@ -82,6 +87,7 @@ func (s *Server) handleDashboardPage(w http.ResponseWriter, r *http.Request) {
 	if res, ok := readSummary(runDir); ok {
 		d.Task = res.TaskName
 	}
+	d.PoolWarning = readManifestPoolWarning(runDir)
 	if v, ok := readLatestVerify(runDir); ok {
 		d.Verdict = buildVerdictView(v)
 	}
@@ -94,6 +100,25 @@ func (s *Server) handleDashboardPage(w http.ResponseWriter, r *http.Request) {
 	render(w, "dashboard.html", d)
 }
 
+// readManifestPoolWarning decodes manifest.json's pool_warning field
+// (the cross-run candidate pool's regression warning appended by the
+// run command). runManifestLimits (server.go) is budget-scoped and
+// must not grow presentation fields, so this stays a local one-field
+// decode. Missing or malformed manifest = "" (no strip).
+func readManifestPoolWarning(runDir string) string {
+	b, err := os.ReadFile(filepath.Join(runDir, "manifest.json"))
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		PoolWarning string `json:"pool_warning,omitempty"`
+	}
+	if json.Unmarshal(b, &m) != nil {
+		return ""
+	}
+	return m.PoolWarning
+}
+
 // pendingVerdict is the no-verify-artifact banner state (未过门禁).
 func pendingVerdict() *gateBanner {
 	return &gateBanner{
@@ -101,6 +126,7 @@ func pendingVerdict() *gateBanner {
 		Title: "未过门禁 —— 尚未运行 verify",
 		Detail: "运行 promptopt verify <run_id> 出具三态结论（0 通过 / 3 回归）；" +
 			"verify.json 的三态判定会在刷新后显示在此横幅。",
+		Icon: "minus-big",
 	}
 }
 
@@ -114,12 +140,14 @@ func buildVerdictView(v verifyFile) *gateBanner {
 			Title: "证据不完整 —— 回归结论不可得",
 			Detail: "两侧存在未派发样本（预算耗尽，退出码 2）：没有完整证据，" +
 				"门禁不给出回归结论——提高预算后重跑 verify。",
+			Icon: "minus-big",
 		}
 	case v.ExitCode == 1:
 		return &gateBanner{
 			Class:  "regress",
 			Title:  "验证评估失败 —— 无有效结论",
 			Detail: "verify 评估侧失败（退出码 1）：先解决执行器/连接问题再重跑 verify。",
+			Icon:   "x-big",
 		}
 	}
 	reg := v.Regression
@@ -130,30 +158,35 @@ func buildVerdictView(v verifyFile) *gateBanner {
 			Class:  "",
 			Title:  "置信通过 —— 提升超出噪声区间，证据充分",
 			Detail: verdictDetail(v, "CI 上界 ≤ 0（提升可信）"),
+			Icon:   "check-big",
 		}
 	case ci != nil && ci.Verdict == "regressed":
 		return &gateBanner{
 			Class:  "regress",
 			Title:  "回归 —— CI 下界超过阈值",
 			Detail: verdictDetail(v, "退化超过噪声区间；发现线上退化时 promptopt rollback <run_id> 回退"),
+			Icon:   "x-big",
 		}
 	case ci != nil:
 		return &gateBanner{
 			Class:  "inconclusive",
 			Title:  "不可判定 —— 差异未超噪声区间，样本量不足",
 			Detail: verdictDetail(v, "退出码 0，但该结论不构成回归背书；锚点库沉淀可收窄区间"),
+			Icon:   "minus-big",
 		}
 	case reg.Regressed:
 		return &gateBanner{
 			Class:  "regress",
 			Title:  "回归 —— 均值差超过阈值",
 			Detail: verdictDetail(v, "均值差判定（未跑配对自助法 CI）；promptopt rollback <run_id> 可回退"),
+			Icon:   "x-big",
 		}
 	default:
 		return &gateBanner{
 			Class:  "",
 			Title:  "通过 —— 均值差在阈值内",
 			Detail: verdictDetail(v, "均值差判定（未跑配对自助法 CI，无三态置信结论）"),
+			Icon:   "check-big",
 		}
 	}
 }
@@ -320,6 +353,9 @@ type overviewPayload struct {
 	Judge       *judgeRow          `json:"judge,omitempty"`
 	Verdict     *verdictPayload    `json:"verdict"`
 	Samples     []sampleRepRow     `json:"samples,omitempty"`
+	// PoolWarning 是 manifest.json 的跨 run 候选池退化预警（omitempty：
+	// 无预警不出现）。
+	PoolWarning string `json:"pool_warning,omitempty"`
 }
 
 func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request) {
@@ -359,6 +395,7 @@ func (s *Server) handleAPIOverview(w http.ResponseWriter, r *http.Request) {
 		p.PrimarySD = sampleSDMean(runDir, f.Primary)
 	}
 	p.Samples = sampleRepRows(runDir)
+	p.PoolWarning = readManifestPoolWarning(runDir)
 	writeJSON(w, p)
 }
 
@@ -519,6 +556,11 @@ type apiHeatCell struct {
 	// max(childSD, curSD) pairing). Only computed when at least one
 	// member carries an SD row — single-shot evidence has no ε.
 	NearNoise bool `json:"near_noise,omitempty"`
+	// Alpha is the heat cell's --ca lightness value (heatAlpha's %.2f
+	// output; "" = NaN → the CSS rule falls back to transparent). CSS
+	// holds the color (--heat-rgb), Go holds the lightness — the same
+	// dual-source contract as the frontier page's SSR cells.
+	Alpha string `json:"alpha,omitempty"`
 }
 
 type heatSampleRow struct {
@@ -596,6 +638,7 @@ func (s *Server) handleAPIHeatmap(w http.ResponseWriter, r *http.Request) {
 			if i < len(m.Scores) {
 				cell.Score = m.Scores[i]
 				cell.Win = m.Scores[i] == best
+				cell.Alpha = heatAlpha(m.Scores[i])
 				if i < len(m.SD) {
 					cell.SD = m.SD[i]
 				}

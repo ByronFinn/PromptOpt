@@ -191,13 +191,17 @@ type compareSideView struct {
 type compareMetricRow struct {
 	Name        string
 	A, B, Delta string
+	// DeltaClass is the sign-directed color class（§P10 Δ 口径统一）：
+	// 正（B 更优）→ delta-up、负 → delta-down、其余（零/缺数据）→ delta-flat。
+	DeltaClass string
 }
 
 // compareUsageRow is one role's token usage compared.
 type compareUsageRow struct {
-	Role  string
-	A, B  string
-	Delta string
+	Role       string
+	A, B       string
+	Delta      string
+	DeltaClass string
 }
 
 // comparePageView backs compare.html.
@@ -295,11 +299,13 @@ func (v *comparePageView) buildMetricRows() {
 	for _, m := range names {
 		va, okA := v.SideA.Metrics[m]
 		vb, okB := v.SideB.Metrics[m]
+		delta := deltaOrDash(okA, okB, va-vb)
 		v.Metrics = append(v.Metrics, compareMetricRow{
-			Name:  m,
-			A:     metricOrDash(okA, va),
-			B:     metricOrDash(okB, vb),
-			Delta: deltaOrDash(okA, okB, va-vb),
+			Name:       m,
+			A:          metricOrDash(okA, va),
+			B:          metricOrDash(okB, vb),
+			Delta:      delta,
+			DeltaClass: deltaClass(delta),
 		})
 	}
 }
@@ -312,12 +318,28 @@ func (v *comparePageView) buildUsageRows() {
 		if !okA && !okB {
 			continue
 		}
+		delta := fmt.Sprintf("%+d", ub.Total()-ua.Total())
 		v.Usage = append(v.Usage, compareUsageRow{
-			Role:  string(role),
-			A:     usageOrDash(okA, ua),
-			B:     usageOrDash(okB, ub),
-			Delta: fmt.Sprintf("%+d", ub.Total()-ua.Total()),
+			Role:       string(role),
+			A:          usageOrDash(okA, ua),
+			B:          usageOrDash(okB, ub),
+			Delta:      delta,
+			DeltaClass: deltaClass(delta),
 		})
+	}
+}
+
+// deltaClass picks the Δ sign class from the formatted delta's first
+// character（html/template 会把前导 + 转义为 &#43;，故取类在 Go 侧做）：
+// '+'→delta-up、'-'→delta-down、其余（'0' 或 '—'）→delta-flat。
+func deltaClass(delta string) string {
+	switch {
+	case strings.HasPrefix(delta, "+"):
+		return "delta-up"
+	case strings.HasPrefix(delta, "-"):
+		return "delta-down"
+	default:
+		return "delta-flat"
 	}
 }
 

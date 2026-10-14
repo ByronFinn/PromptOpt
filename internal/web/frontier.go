@@ -3,7 +3,6 @@ package web
 import (
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"math"
 	"net/http"
 	"os"
@@ -41,13 +40,14 @@ func readAdopted(runDir string) (adoptedFile, bool) {
 	return a, true
 }
 
-// heatCell is one per-sample score cell with its inline color.
+// heatCell is one per-sample score cell with its heat alpha.
 type heatCell struct {
 	Value string
-	// Color is the rgba background as trusted CSS: the value is built
-	// server-side from a clamped float, but html/template's style
-	// attribute filter rejects any parenthesis, which rgba() needs.
-	Color template.CSS
+	// Alpha feeds the cell's --ca custom property（CSS 持色、Go 持明度）：
+	// html/template 放行纯数字样式值，而 rgba(…) 的括号会被样式属性
+	// 过滤器拒收——rgba 公式单点落在 page_css 的 .heat .cell 规则里。
+	// 空串（NaN / 旧工件无分数）→ 无 --ca → 回退透明，安全。
+	Alpha string
 }
 
 // frontierMemberView is one candidate card plus its heat-table row.
@@ -171,7 +171,7 @@ func buildFrontierView(id, runDir string, f engine.FrontierFile) frontierPageVie
 			for _, sc := range m.Scores {
 				view.Cells = append(view.Cells, heatCell{
 					Value: fmt.Sprintf("%.2f", sc),
-					Color: heatColor(sc),
+					Alpha: heatAlpha(sc),
 				})
 			}
 			if hasBaseline && len(baseline) == len(m.Scores) && !view.IsBaseline {
@@ -277,14 +277,16 @@ func reasonLabel(reason string) string {
 	}
 }
 
-// heatColor maps a per-sample score to an inline rgba background,
-// clamped to [0, 1] and capped for text contrast.
-func heatColor(v float64) template.CSS {
+// heatAlpha maps a per-sample score to the heat cell's --ca alpha,
+// clamped to [0, 1] and bounded to [0.05, 0.55] so the %.2f rendering
+// always carries the "0." prefix. NaN yields "" (no --ca; the CSS rule
+// falls back to alpha 0, transparent). 包级共享：dashboard /api/heatmap
+// 的 alpha 字段与本页 SSR 同源此函数，防两处公式漂移。
+func heatAlpha(v float64) string {
 	if math.IsNaN(v) {
 		return ""
 	}
-	a := 0.05 + 0.5*min(max(v, 0), 1)
-	return template.CSS(fmt.Sprintf("rgba(26,127,55,%.2f)", a))
+	return fmt.Sprintf("%.2f", 0.05+0.5*min(max(v, 0), 1))
 }
 
 // handleAdopt writes (or switches) adopted.json. Idempotent: adopting

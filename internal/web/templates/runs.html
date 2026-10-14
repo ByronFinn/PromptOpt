@@ -1,6 +1,7 @@
 {{template "shell_head" .}}
 </head>
 <body>
+{{template "icon_sprite" .}}
 <div class="shell">
 {{template "shell_sidebar" .}}
 <main class="main">
@@ -14,14 +15,14 @@
 
   {{if .Live}}
   <div id="checkpoint-banner" hidden class="card" style="margin:0 0 14px">
-    ⏸ <strong>合成集等待审核</strong>：<a id="checkpoint-link" href="#">打开审核页</a>
+    {{icon "i-pause" 12}} <strong>合成集等待审核</strong>：<a id="checkpoint-link" href="#">打开审核页</a>
     （检查样本、增删改后批准，或直接编辑 synth/&lt;run_id&gt;/checkpoint.json）
   </div>
   <div id="live-status" style="font-size:13px;color:var(--muted)">等待事件…</div>
   {{end}}
 
   <div class="filters">
-    <input id="q" placeholder="搜索 run id / 任务 / task_key" aria-label="搜索 runs" style="min-width:260px">
+    {{icon "i-search" 14}}<input id="q" placeholder="搜索 run id / 任务 / task_key" aria-label="搜索 runs" style="min-width:260px">
     <select id="f-status" aria-label="状态筛选">
       <option value="">状态：全部</option><option value="ok">已完成</option><option value="bad">失败</option><option value="warn">预算耗尽</option>
     </select>
@@ -66,8 +67,10 @@ function row(id){
   let tr=rows[id];
   if(!tr){
     tr=document.createElement('tr');
-    tr.innerHTML='<td class="mono"></td><td class="dim">评估中…</td><td></td><td></td><td></td>';
-    tr.children[0].textContent=id;
+    // 9 列与表头对齐：勾选/Run/任务/状态/主指标/评估/exit/时间/操作
+    tr.innerHTML='<td></td><td class="mono"></td><td class="dim">评估中…</td><td><span class="badge dim">运行中</span></td><td></td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="dim">—</td>';
+    tr.children[1].textContent=id;
+    tr.dataset.search=id;
     rows[id]=tr;
     document.querySelector('#runs-table tbody').appendChild(tr);
   }

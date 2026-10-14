@@ -133,11 +133,21 @@ func TestDashboardPageStructure(t *testing.T) {
 		t.Error("dashboard still carries the prototype demo feed rows/hint")
 	}
 
-	// CSS same-origin: the template's <style> block must stay
-	// byte-identical to the prototype's design tokens.
-	got := styleBlock(t, mustRead(t, filepath.Join("templates", "dashboard.html")))
+	// CSS same-origin: the page pulls the shared page_css define, so the
+	// rendered dashboard <style> must stay byte-identical to the
+	// prototype's design tokens.
+	got := styleBlock(t, mustRead(t, filepath.Join("templates", "theme.html")))
 	if want := prototypeStyleBlock(t); got != want {
-		t.Errorf("dashboard <style> diverged from the prototype (%d vs %d bytes)", len(got), len(want))
+		t.Errorf("page_css diverged from the prototype (%d vs %d bytes)", len(got), len(want))
+	}
+
+	// Rendered cross-page sameness: the dashboard page and the settings
+	// page must carry the byte-equal <style> block (每页一块惯例，同源
+	// page_css——两页各自渲染后仍须逐字节一致).
+	dashBody := get(t, mustURL(t, h, "/runs/"+runID+"/dashboard")).Body
+	settingsBody := get(t, mustURL(t, h, "/settings")).Body
+	if dashStyle, settingsStyle := styleBlock(t, dashBody), styleBlock(t, settingsBody); dashStyle != settingsStyle {
+		t.Errorf("rendered dashboard vs settings <style> diverged (%d vs %d bytes)", len(dashStyle), len(settingsStyle))
 	}
 
 	if res := get(t, mustURL(t, h, "/runs/no-such-run/dashboard")); res.StatusCode != http.StatusNotFound {

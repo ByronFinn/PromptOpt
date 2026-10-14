@@ -1,6 +1,7 @@
 {{template "shell_head" .}}
 </head>
 <body data-run="{{.ID}}">
+{{template "icon_sprite" .}}
 <div class="shell">
 {{template "shell_sidebar" .}}
 <main class="main">
@@ -12,7 +13,7 @@
     </div>
   </div>
 
-  <h2 style="font-size:13px;color:var(--muted);margin:0 0 8px;font-weight:600;letter-spacing:.04em;text-transform:uppercase">评估单元</h2>
+  <h2 style="font-size:13px;color:var(--muted);margin:0 0 8px;font-weight:600;letter-spacing:.04em;text-transform:uppercase">{{icon "i-trace" 14}} 评估单元</h2>
   <div class="filters" role="tablist" aria-label="trace 单元">
     {{range .Units}}
       <a class="btn{{if eq .Name $.Unit}} btn-primary{{end}}" href="/runs/{{$.ID}}/trace?unit={{.Name}}"{{if eq .Name $.Unit}} aria-current="page"{{end}}>{{.Label}}</a>
@@ -55,7 +56,7 @@
     <h2 style="font-size:13px;color:var(--muted);margin:0 0 var(--space-3);font-weight:600;letter-spacing:.04em;text-transform:uppercase">详情 · <span class="num">{{.File}}</span></h2>
     <table style="width:100%">
       {{range .Detail}}
-        <tr><th style="width:11rem;white-space:nowrap;text-align:left;color:var(--muted);font-size:12px;background:#F4F8FD;padding:7px 10px;border-bottom:1px solid var(--border)">{{.K}}</th>
+        <tr><th style="width:11rem;white-space:nowrap;text-align:left;color:var(--muted);font-size:12px;background:var(--th-bg);padding:7px 10px;border-bottom:1px solid var(--border)">{{.K}}</th>
         <td class="num" style="white-space:pre-wrap;word-break:break-word;padding:7px 10px;border-bottom:1px solid var(--border);font-size:12.5px">{{.V}}</td></tr>
       {{end}}
     </table>

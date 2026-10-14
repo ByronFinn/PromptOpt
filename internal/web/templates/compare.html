@@ -1,13 +1,14 @@
 {{template "shell_head" .}}
 </head>
 <body>
+{{template "icon_sprite" .}}
 <div class="shell">
 {{template "shell_sidebar" .}}
 <main class="main">
   <div class="page-head">
     <div>
       <div class="crumbs"><a href="/runs">Runs</a> / run 对比</div>
-      <h1>run 对比</h1>
+      <h1>{{icon "i-compare" 18}} run 对比</h1>
       <p>数据源：summary.json（状态/exit/指标均值/分角色用量）+ frontier.json（Top-1）</p>
     </div>
   </div>
@@ -46,7 +47,7 @@
       <thead><tr><th>指标</th><th class="num">A</th><th class="num">B</th><th class="num">Δ</th></tr></thead>
       <tbody>
       {{range .Metrics}}
-        <tr><td class="num">{{.Name}}</td><td class="num">{{.A}}</td><td class="num">{{.B}}</td><td class="num" style="color:var(--muted)">{{.Delta}}</td></tr>
+        <tr><td class="num">{{.Name}}</td><td class="num">{{.A}}</td><td class="num">{{.B}}</td><td class="num {{.DeltaClass}}">{{.Delta}}</td></tr>
       {{end}}
       </tbody>
     </table>
@@ -62,7 +63,7 @@
       <thead><tr><th>角色</th><th class="num">A</th><th class="num">B</th><th class="num">Δ</th></tr></thead>
       <tbody>
       {{range .Usage}}
-        <tr><td class="num">{{.Role}}</td><td class="num">{{.A}}</td><td class="num">{{.B}}</td><td class="num" style="color:var(--muted)">{{.Delta}}</td></tr>
+        <tr><td class="num">{{.Role}}</td><td class="num">{{.A}}</td><td class="num">{{.B}}</td><td class="num {{.DeltaClass}}">{{.Delta}}</td></tr>
       {{end}}
       </tbody>
     </table>
