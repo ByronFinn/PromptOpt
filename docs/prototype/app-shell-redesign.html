@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PromptOpt 应用外壳原型 · 审查用</title>
+<style>
+:root{
+  --bg:#EEF2F7; --card:#FFFFFF; --fg:#1E3A8A; --fg-strong:#0F2547;
+  --muted:#475569; --muted-bg:#E9EEF6; --border:#DBEAFE; --border-strong:#B9CBE8;
+  --primary:#1E40AF; --secondary:#3B82F6; --accent:#D97706; --accent-ink:#B45309;
+  --ok:#15803D; --bad:#DC2626; --warn:#B45309;
+  --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px;
+  --radius:10px; --shadow:0 1px 2px rgba(15,37,71,.06),0 4px 12px rgba(15,37,71,.05);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.6 "PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif}
+a{color:var(--primary);text-decoration:none}
+a:hover{color:var(--accent-ink)}
+.shell{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
+.sidebar{background:#0F2547;color:#DDE7F7;padding:20px 16px;position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:8px;color:#fff;font-weight:700;font-size:17px;margin-bottom:18px}
+.brand svg{flex:none}
+.nav-group{margin:14px 0 4px;font-size:11px;letter-spacing:.12em;color:#7C93B8;text-transform:uppercase}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;color:#DDE7F7;font-size:14px;margin:2px 0}
+.nav-item:hover{background:rgba(59,130,246,.15)}
+.nav-item.active{background:var(--secondary);color:#fff;font-weight:600}
+.nav-item .count{margin-left:auto;font-size:12px;opacity:.75}
+.sidebar-spacer{flex:1}
+.sidebar-footer{margin-top:16px;padding-top:12px;border-top:1px solid rgba(185,203,232,.25)}
+.btn-gear{display:flex;align-items:center;gap:10px;width:100%;padding:10px;border-radius:8px;background:transparent;border:1px solid rgba(185,203,232,.35);color:#DDE7F7;font-size:14px;cursor:pointer}
+.btn-gear:hover{background:rgba(59,130,246,.15);border-color:var(--secondary)}
+.btn-gear.active{background:var(--secondary);border-color:var(--secondary);color:#fff}
+.main{padding:22px 28px 48px;min-width:0}
+.page-head{display:flex;align-items:flex-end;gap:16px;margin-bottom:18px;flex-wrap:wrap}
+.page-head h1{font-size:22px;margin:0;color:var(--fg-strong)}
+.page-head p{margin:0;color:var(--muted);font-size:13px}
+.crumbs{font-size:12px;color:var(--muted);margin-bottom:6px}
+.layout-note{max-width:1240px;margin:0 auto 20px;padding:10px 14px;border:1px dashed var(--border-strong);border-radius:8px;color:var(--muted);font-size:13px;background:#fff}
+.layout-note b{color:var(--accent-ink)}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+.card h3{margin:0 0 10px;font-size:14px;color:var(--fg-strong)}
+.stat .value{font-size:26px;font-weight:700;color:var(--fg-strong)}
+.stat .sub{font-size:12px;color:var(--muted)}
+.table-card{margin-top:18px;padding:0;overflow:hidden}
+.table-card table{width:100%;border-collapse:collapse;font-size:14px}
+.table-card th,.table-card td{padding:10px 14px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+.table-card thead th{background:var(--muted-bg);color:var(--fg-strong);font-size:13px}
+.badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px}
+.badge.ok{background:#DCFCE7;color:var(--ok)}
+.badge.warn{background:#FEF3C7;color:var(--warn)}
+.badge.dim{background:#E2E8F0;color:#475569}
+.badge.bad{background:#FEE2E2;color:var(--bad)}
+.filters{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+.filters input,.filters select{padding:7px 10px;border:1px solid var(--border-strong);border-radius:8px;background:#fff;color:var(--fg);font-size:14px}
+.footer-note{max-width:1240px;margin:26px auto 0;color:var(--muted);font-size:12px}
+.demo-ghost{opacity:.85}
+@media (max-width:900px){
+  .shell{grid-template-columns:1fr}
+  .sidebar{position:relative;height:auto}
+  .cards{grid-template-columns:1fr 1fr}
+}
+@media (max-width:600px){ .cards{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M4 17c3-6 5-9 8-9s5 3 8 9" stroke="#F59E0B" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="12" cy="17" r="2.4" fill="#3B82F6"/>
+      </svg>
+      PromptOpt
+    </div>
+    <div class="nav-group">工作区</div>
+    <a class="nav-item active" href="#overview" data-page="overview">总览</a>
+    <a class="nav-item" href="#runs" data-page="runs">Runs <span class="count">8</span></a>
+    <a class="nav-item" href="#synth" data-page="synth">合成审核</a>
+    <div class="nav-group">关于</div>
+    <a class="nav-item demo-ghost" href="dashboard-redesign.html">旧版 dashboard（参照）</a>
+    <div class="sidebar-spacer"></div>
+    <div class="sidebar-footer">
+      <button class="btn-gear" id="open-settings" data-page="settings" type="button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+          <path d="M12 2.5l1 3.2 3.2-1 1.6 2.7-2.3 2.3 2.3 2.3-1.6 2.7-3.2-1-1 3.2h-1l-1-3.2-3.2 1-1.6-2.7 2.3-2.3-2.3-2.3L6.8 6.7l3.2 1 1-3.2h1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+        </svg>
+        设置
+      </button>
+    </div>
+    <div style="margin-top:18px;font-size:12px;color:#7C93B8">
+      <b style="color:#B9CBE8">审查说明</b><br>
+      这是静态交互原型，数据均为示意。<br>
+      方案：左侧常驻导航 + 统一页面骨架。<br>
+      旧 URL 保留，逐步并入新外壳。
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="layout-note">
+      <b>审查方式</b>：点击左栏切换三个页面的骨架示意（总览 / Runs / 设置）；
+      这是布局审查用静态原型，不接后端。
+    </div>
+
+    <section id="overview">
+      <div class="page-head">
+        <div>
+          <div class="crumbs">工作区 / 总览</div>
+          <h1>工作区总览</h1>
+          <p>回答「现在整体怎么样」：run 健康、门禁风险、最近趋势。</p>
+        </div>
+      </div>
+      <div class="cards">
+        <div class="card stat"><h3>最近 24h runs</h3><div class="value">5</div><div class="sub">4 成功 · 1 失败</div></div>
+        <div class="card stat"><h3>verify 门禁</h3><div class="value">2</div><div class="sub">1 置信通过 · 1 回归风险</div></div>
+        <div class="card stat"><h3>平均主指标</h3><div class="value">0.83</div><div class="sub">最近 10 个 run</div></div>
+        <div class="card stat"><h3>token 消耗</h3><div class="value">42.1k</div><div class="sub">最近 10 个 run</div></div>
+      </div>
+      <div class="card table-card">
+        <h3 style="padding:14px 16px;margin:0">最近 runs（仅摘要，完整列表在 Runs 页）</h3>
+        <table>
+          <thead><tr><th>Run</th><th>任务</th><th>状态</th><th>门禁</th><th>主指标</th></tr></thead>
+          <tbody>
+            <tr><td><a href="#runs">20261013-024014-e53c80e8</a></td><td>probe_tcm_extract</td><td><span class="badge ok">已完成</span></td><td><span class="badge dim">未过门禁</span></td><td>1.000</td></tr>
+            <tr><td><a href="#runs">20261013-022346-5c1a3efc</a></td><td>ecommerce_sentiment</td><td><span class="badge ok">已完成</span></td><td><span class="badge bad">回归</span></td><td>0.900</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="runs" hidden>
+      <div class="page-head">
+        <div>
+          <div class="crumbs">工作区 / Runs</div>
+          <h1>Runs</h1>
+          <p>回答「哪些 run 存在、怎么筛选、下一步点进去看什么」。</p>
+        </div>
+      </div>
+      <div class="filters">
+        <input placeholder="搜索 run id / 任务 / task_key" aria-label="搜索 runs">
+        <select aria-label="状态筛选"><option>状态：全部</option><option>已完成</option><option>失败</option><option>预算耗尽</option></select>
+        <select aria-label="门禁筛选"><option>门禁：全部</option><option>通过</option><option>回归</option><option>未过门禁</option></select>
+        <button style="margin-left:auto;padding:8px 16px;border-radius:8px;border:none;background:var(--border);color:var(--muted);font-size:14px;cursor:not-allowed" disabled>对比（勾选 ≥2 个 run 后可用）</button>
+      </div>
+      <div class="card table-card">
+        <table>
+          <thead><tr><th style="width:28px"><input type="checkbox" aria-label="全选" disabled></th><th>Run</th><th>任务 / task_key</th><th>状态</th><th>门禁</th><th>主指标</th><th>评估</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr><td><input type="checkbox" aria-label="选择该 run"></td><td><a href="#runs">20261013-024014-e53c80e8</a></td><td>probe_tcm_extract · task</td><td><span class="badge ok">已完成</span></td><td><span class="badge dim">未过门禁</span></td><td>1.000</td><td>3/3</td><td><a href="#run">工作区</a></td></tr>
+            <tr><td><input type="checkbox" aria-label="选择该 run"></td><td><a href="#run">20261013-022346-5c1a3efc</a></td><td>ecommerce_sentiment · sentiment-test</td><td><span class="badge ok">已完成</span></td><td><span class="badge bad">回归</span></td><td>0.900</td><td>52/120</td><td><a href="#run">工作区</a></td></tr>
+            <tr><td><input type="checkbox" aria-label="选择该 run"></td><td><a href="#runs">20261013-021954-901f542d</a></td><td>synth_task · synth</td><td><span class="badge ok">已完成</span></td><td><span class="badge dim">未过门禁</span></td><td>0.722</td><td>8/8</td><td><a href="#run">工作区</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="synth" hidden>
+      <div class="page-head">
+        <div>
+          <div class="crumbs">工作区 / 合成审核</div>
+          <h1>合成审核</h1>
+          <p>等待人工批准的合成数据集批次；批准后进入优化循环。</p>
+        </div>
+      </div>
+      <div class="cards">
+        <div class="card stat"><h3>待审核批次</h3><div class="value">1</div><div class="sub">interactive 模式暂停中</div></div>
+        <div class="card stat"><h3>样本数</h3><div class="value">8</div><div class="sub">3 已删除 · 2 已编辑</div></div>
+        <div class="card stat"><h3>方差过滤</h3><div class="value">5/8</div><div class="sub">p¹ 阈值后保留</div></div>
+        <div class="card stat"><h3>状态</h3><div class="value">待批准</div><div class="sub">synth/20261013-024014</div></div>
+      </div>
+      <div class="card table-card">
+        <h3 style="padding:14px 16px;margin:0">批次列表</h3>
+        <table>
+          <thead><tr><th>批次</th><th>来源 prompt 哈希</th><th>样本</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr><td>20261013-024014</td><td class="num">a1b2c3d4e5f6</td><td>8</td><td><span class="badge warn">待审核</span></td><td><a href="#synth">打开审核页</a> · <a href="#synth">批准</a></td></tr>
+            <tr><td>20261013-022346</td><td class="num">f6e5d4c3b2a1</td><td>6</td><td><span class="badge ok">已批准</span></td><td><a href="#synth">查看快照</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="settings" hidden>
+      <div class="page-head">
+        <div>
+          <div class="crumbs">工作区 / 设置</div>
+          <h1>设置</h1>
+          <p>必填项未配置时 run 无法启动；选填项影响行为但不阻塞。</p>
+        </div>
+      </div>
+      <div class="card">
+        <h3>必填项 <span class="badge bad">缺一则 run 失败</span></h3>
+        <div class="filters">
+          <input placeholder="搜索必填配置项" aria-label="搜索必填配置项">
+        </div>
+        <table>
+          <thead><tr><th>key</th><th>值</th><th>来源</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td>base_url</td><td><code>http://192.168.56.39:59001/v1</code></td><td>config 文件</td><td><span class="badge ok">已配置</span></td></tr>
+            <tr><td>model</td><td><code>jiuwei-tcm</code></td><td>config 文件</td><td><span class="badge ok">已配置</span></td></tr>
+            <tr><td>api_key</td><td><code>******</code></td><td>env</td><td><span class="badge ok">已配置</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>选填项 <span class="badge dim">有默认值，不阻塞</span></h3>
+        <div class="filters">
+          <input placeholder="搜索选填配置项" aria-label="搜索选填配置项">
+        </div>
+        <table>
+          <thead><tr><th>key</th><th>值</th><th>来源</th><th>作用</th></tr></thead>
+          <tbody>
+            <tr><td>max_tokens</td><td><code>8192</code></td><td>config 文件</td><td>单次生成上限</td></tr>
+            <tr><td>timeout</td><td><code>180s</code></td><td>config 文件</td><td>单请求超时</td></tr>
+            <tr><td>optimizer</td><td><code>auto</code></td><td>config 文件</td><td>范式路由</td></tr>
+            <tr><td>judge_backend</td><td><code>decision</code></td><td>config 文件</td><td>裁判级联</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <section id="run" hidden class="main" style="grid-column:2">
+    <div class="page-head">
+      <div>
+        <div class="crumbs"><a href="#runs">Runs</a> / <span class="num">20261013-022346-5c1a3efc</span></div>
+        <h1>Run 工作区 <span class="num" style="font-size:15px;color:var(--muted)">20261013-022346-5c1a3efc</span></h1>
+        <p>同屏回答「这个 run 值不值得采纳」；下方子视图共享同一 run 上下文。</p>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <span class="badge ok">已完成</span>
+        <span class="badge bad">verify 回归</span>
+      </div>
+    </div>
+    <nav style="display:flex;gap:2px;border-bottom:2px solid var(--border);margin-bottom:18px">
+      <button style="padding:10px 16px;background:none;border:none;border-bottom:2px solid var(--accent);color:var(--fg-strong);font-weight:600;font-size:14px;cursor:pointer">① 总览监控</button>
+      <button style="padding:10px 16px;background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);font-size:14px;cursor:pointer">② 前沿与采纳</button>
+      <button style="padding:10px 16px;background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);font-size:14px;cursor:pointer">③ 样本证据</button>
+      <button style="padding:10px 16px;background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);font-size:14px;cursor:pointer">④ 交付门禁</button>
+    </nav>
+    <div class="cards">
+      <div class="card stat"><h3>主指标（llm_judge）</h3><div class="value">0.667</div><div class="sub">交付候选 g02 · Δ −0.34（CI [0.15, 0.56]）</div></div>
+      <div class="card stat"><h3>评估进度</h3><div class="value">52/120</div><div class="sub">评估次数 · 余 68</div></div>
+      <div class="card stat"><h3>token 预算</h3><div class="value">7.3k</div><div class="sub">executor total · 不限</div></div>
+      <div class="card stat"><h3>失败样本</h3><div class="value">0</div><div class="sub">s4 / s5 / s6</div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3>轮次趋势 · 每轮最优</h3>
+      <div style="height:160px;display:flex;align-items:flex-end;gap:8px;padding:8px 0">
+        <div style="flex:1;background:var(--muted-bg);border-radius:4px 4px 0 0;height:66%"></div>
+        <div style="flex:1;background:var(--secondary);border-radius:4px 4px 0 0;height:76%"></div>
+        <div style="flex:1;background:var(--primary);border-radius:4px 4px 0 0;height:90%"></div>
+        <div style="flex:1;background:var(--secondary);border-radius:4px 4px 0 0;height:66%"></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3>下钻示意（决策落地：审计不再独立成 tab）</h3>
+      <p style="font-size:13px;color:var(--muted);margin:6px 0 10px">③ 样本行点开 → 该样本完整调用链（executor/judge prompt+response+usage）；② 谱系行点开 → 优化器 reflect/rewrite 调用与假设。</p>
+      <details>
+        <summary style="cursor:pointer;font-size:14px"><code>s6</code> · llm_judge=0 · 点开看调用链</summary>
+        <div style="padding:10px 0;font-size:13px;color:var(--muted)">
+          <div>executor 调用：prompt 717B → response 21B · 0.8s</div>
+          <div>judge 调用（decision→回落 llm）：confidence 0.21 → 回落 · 1.2s</div>
+          <div style="margin-top:6px"><a href="#run">查看原始调用 JSON（trace 工件）</a></div>
+        </div>
+      </details>
+    </div>
+    <div class="card table-card">
+      <h3 style="padding:14px 16px;margin:0">工件归并映射（审查用）</h3>
+      <table>
+        <thead><tr><th>原独立页面</th><th>去向</th></tr></thead>
+        <tbody>
+          <tr><td>frontier.html</td><td>② 前沿与采纳（已并入）</td></tr>
+          <tr><td>trace.html</td><td>③ 样本行下钻抽屉（调用链随样本走）</td></tr>
+          <tr><td>report.html</td><td>① 总览底部「查看优化报告」入口，保留路由</td></tr>
+          <tr><td>compare.html</td><td>Runs 页勾选 ≥2 → 顶部「对比」按钮（保留路由）</td></tr>
+          <tr><td>diff.html</td><td>④ 交付门禁（配对差分表）</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+<script>
+const links=[...document.querySelectorAll('.nav-item[data-page]')];
+const sections=['overview','runs','synth','settings'];
+function show(name){
+  sections.forEach(id=>{
+    const sec=document.getElementById(id);
+    if(sec)sec.hidden=id!==name;
+  });
+  links.forEach(l=>l.classList.toggle('active',l.dataset.page===name));
+}
+links.forEach(l=>l.addEventListener('click',e=>{
+  e.preventDefault();
+  show(l.dataset.page);
+  history.replaceState(null,'','#'+l.dataset.page);
+}));
+const init=location.hash.slice(1);
+if(sections.includes(init))show(init);
+document.addEventListener('click',e=>{
+  const a=e.target.closest('a[href="#run"]');
+  if(!a)return;
+  e.preventDefault();
+  sections.forEach(id=>{const s=document.getElementById(id);if(s)s.hidden=true;});
+  links.forEach(l=>l.classList.remove('active'));
+  document.getElementById('run').hidden=false;
+  history.replaceState(null,'','#run');
+});
+if(location.hash==='#run'){
+  sections.forEach(id=>{const s=document.getElementById(id);if(s)s.hidden=true;});
+  links.forEach(l=>l.classList.remove('active'));
+  document.getElementById('run').hidden=false;
+}
+</script>
+</body>
+</html>
