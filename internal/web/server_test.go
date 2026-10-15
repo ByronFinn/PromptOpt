@@ -636,6 +636,9 @@ func TestSynthReviewPage(t *testing.T) {
 		"合成集审核", "tcm_zhenghou", "判断证候：{input}", "变体甲：{input}",
 		"s1", "s2", "死样本·全对", "保留", "风寒束表", "0.5000",
 		"等待审核", "批准并继续", "every 2s", "htmx.min.js",
+		// 判定图例与编辑引导（split 下拉、expected JSON 说明）。
+		"<option value=\"train\"", "<option value=\"dev\"", "<option value=\"test\"",
+		"所有探针都答对", "须为合法 JSON",
 	} {
 		if !strings.Contains(res.Body, want) {
 			t.Errorf("review page missing %q", want)

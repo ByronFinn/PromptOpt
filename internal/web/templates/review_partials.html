@@ -1,18 +1,18 @@
 {{define "review_rows"}}
 <tbody id="review-rows">
-  {{range .Rows}}
+  {{range $row := .Rows}}
   <tr>
-    <td class="mono">{{.ID}}</td>
-    <td class="mono">{{.Split}}</td>
-    <td><span class="{{.VerdictClass}}">{{.VerdictLabel}}</span><br><span class="mono dim">{{.Verdict}}</span></td>
-    <td class="mono">{{.Variance}}</td>
-    <td class="mono">{{.Scores}}</td>
-    <td><input name="split" value="{{.Split}}" aria-label="split"></td>
-    <td><textarea name="input" aria-label="input">{{.Input}}</textarea></td>
-    <td><textarea name="expected" class="mono" aria-label="expected">{{.Expected}}</textarea></td>
+    <td class="mono">{{$row.ID}}</td>
+    <td class="mono">{{$row.Split}}</td>
+    <td><span class="{{$row.VerdictClass}}">{{$row.VerdictLabel}}</span><br><span class="mono dim">{{$row.Verdict}}</span></td>
+    <td class="mono">{{$row.Variance}}</td>
+    <td class="mono">{{$row.Scores}}</td>
+    <td><select name="split" aria-label="split">{{range $s := $.Splits}}<option value="{{$s}}"{{if eq $s $row.Split}} selected{{end}}>{{$s}}</option>{{end}}</select></td>
+    <td><textarea name="input" aria-label="输入">{{$row.Input}}</textarea></td>
+    <td><textarea name="expected" class="mono" aria-label="期望答案（JSON）" placeholder='例："positive" 或 {"key": "value"}'>{{$row.Expected}}</textarea></td>
     <td>
-      <button hx-post="/synth/{{$.ID}}/samples/{{.ID}}" hx-include="closest tr" hx-target="#review-rows" hx-swap="outerHTML">保存</button>
-      <button hx-delete="/synth/{{$.ID}}/samples/{{.ID}}" hx-confirm="删除样本 {{.ID}}？" hx-target="#review-rows" hx-swap="outerHTML">删除</button>
+      <button hx-post="/synth/{{$.ID}}/samples/{{$row.ID}}" hx-include="closest tr" hx-target="#review-rows" hx-swap="outerHTML">保存</button>
+      <button hx-delete="/synth/{{$.ID}}/samples/{{$row.ID}}" hx-confirm="删除样本 {{$row.ID}}？" hx-target="#review-rows" hx-swap="outerHTML">删除</button>
     </td>
   </tr>
   {{else}}

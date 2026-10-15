@@ -19,7 +19,7 @@
     {{if .Task.Name}}
     <table style="width:100%">
       <tr><th style="width:11rem;text-align:left">名称</th><td><span class="num">{{.Task.Name}}</span> — {{.Task.Description}}</td></tr>
-      <tr><th style="text-align:left">指标</th><td class="num">{{range .Task.Metrics}}{{.}} {{end}}{{if .Task.PrimaryMetric}}（主指标：{{.Task.PrimaryMetric}}）{{end}}</td></tr>
+      <tr><th style="text-align:left">指标</th><td><span class="num">{{range .Task.Metrics}}{{.}} {{end}}</span>{{if .Task.PrimaryMetric}}（主指标：<span class="num">{{.Task.PrimaryMetric}}</span>）{{end}}</td></tr>
       <tr><th style="text-align:left">prompt_template</th><td><pre>{{.Task.PromptTemplate}}</pre></td></tr>
     </table>
     {{else}}
@@ -30,20 +30,29 @@
   <div class="card" style="margin-top:var(--space-4)">
     <h2>过滤报告</h2>
     {{if .Filtered}}
-    <p style="margin:0;font-size:13px;color:var(--muted)">探针变体 <span class="num">{{len .Probes}}</span> 个 · 阈值 <span class="num">{{.Thresholds}}</span> · 保留 <strong class="num" style="color:var(--ok)">{{.Kept}}</strong> / 共 <span class="num">{{.Total}}</span>（剔除 <strong class="num" style="color:var(--danger)">{{.Dropped}}</strong>）</p>
+    <p style="margin:0 0 6px;font-size:13px;color:var(--muted)">探针变体 <span class="num">{{len .Probes}}</span> 个 · 阈值 <span class="num">{{.Thresholds}}</span>（得分 ≤Low 记为答错、≥High 记为答对）· 保留 <strong class="num" style="color:var(--ok)">{{.Kept}}</strong> / 共 <span class="num">{{.Total}}</span>（剔除 <strong class="num" style="color:var(--danger)">{{.Dropped}}</strong>）</p>
+    <p style="margin:0 0 8px;font-size:13px">每个探针变体是同一任务的一版不同措辞的 prompt：管线让每个变体对每个样本各答一遍，<strong>所有探针都给出同一结论的样本没有区分度，会被剔除</strong>——只留下能区分 prompt 好坏的样本，优化才有信号。</p>
+    <div style="display:flex;flex-wrap:wrap;gap:4px 18px;font-size:13px">
+      <span><span class="ok">保留</span> 探针答案有分歧——样本能区分 prompt 优劣</span>
+      <span><span class="bad">死样本·全对</span> 所有探针都答对——太简单，无优化信号</span>
+      <span><span class="bad">死样本·全错</span> 所有探针都答错——当前模型完全做不出</span>
+      <span><span class="warn">高噪声</span> 所有探针都答得不上不下——结论不稳，难以驱动优化</span>
+      <span><span class="dim">未测得</span> 探针证据不全——保守保留</span>
+    </div>
     {{else}}
     <p style="margin:0;font-size:13px;color:var(--muted)">方差过滤尚未完成，以下样本还没有 p¹ 判定。</p>
     {{end}}
     {{if .Probes}}
-    <div class="filters" style="margin:10px 0 0">{{range .Probes}}<span class="badge dim num">{{.}}</span>{{end}}</div>
+    <div class="filters" style="margin:10px 0 0"><span class="dim" style="font-size:12.5px">本次使用的探针变体：</span>{{range .Probes}}<span class="badge dim num">{{.}}</span>{{end}}</div>
     {{end}}
   </div>
 
   <div class="card table-card" style="margin-top:var(--space-4)">
     <h3>样本表（{{.Total}}）</h3>
+    <p style="margin:0 0 8px;font-size:13px;color:var(--muted)">编辑说明：expected 须为合法 JSON——字符串要带双引号（如 <span class="num">"positive"</span>）、数组 <span class="num">["a","b"]</span>、对象 <span class="num">{"key":"value"}</span>；split 从下拉选择 train / dev / test。非法 JSON 保存时会被拒绝并提示原因。</p>
     <div style="overflow-x:auto">
     <table>
-      <thead><tr><th>样本</th><th>split</th><th>判定</th><th>方差</th><th>探针分</th><th>编辑 split</th><th>input</th><th>expected（严格 JSON）</th><th>操作</th></tr></thead>
+      <thead><tr><th>样本</th><th>split</th><th>判定</th><th>方差</th><th>探针分</th><th>改 split</th><th>输入（input）</th><th>期望答案（expected，JSON）</th><th>操作</th></tr></thead>
       {{template "review_rows" .}}
     </table>
     </div>

@@ -107,7 +107,8 @@ type synthReviewView struct {
 	Thresholds   string
 	Kept, Total  int
 	Dropped      int
-	Status       string // "", pending, approved
+	Splits       []string // dropdown options for the split editor; same slice the POST handler validates against
+	Status       string   // "", pending, approved
 	StatusClass  string
 	StatusLabel  string
 	Rows         []synthRowView
@@ -277,6 +278,7 @@ func (s *Server) loadReview(w http.ResponseWriter, r *http.Request) (*synthRevie
 		Model:        manifest.Model,
 		SynthSamples: manifest.SynthSamples,
 		CreatedAt:    manifest.CreatedAt.Format("2006-01-02 15:04:05"),
+		Splits:       core.ValidSplits,
 	}
 	if spec, err := harness.LoadSpec(dir); err == nil {
 		v.Task, v.Probes = spec.Task, spec.Probes
